@@ -1,4 +1,5 @@
-import { Alert, Image, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { styles } from '../styles';
 
@@ -24,6 +25,7 @@ export default function ProfileScreen({
   onSelectTab,
   onLogout,
 }) {
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   const handlePress = (title, message) => Alert.alert(title, message);
   const isTabActive = (tab) => activeTab === tab;
   const profileName = currentUser?.fullName || currentUser?.name || currentUser?.username || 'User';
@@ -70,6 +72,21 @@ export default function ProfileScreen({
         { text: 'Cancel', style: 'cancel' },
       ]
     );
+  };
+
+  const handleLogout = () => {
+    setShowLogoutModal(true);
+  };
+
+  const handleConfirmLogout = () => {
+    setShowLogoutModal(false);
+    if (onLogout) {
+      onLogout();
+    }
+  };
+
+  const handleCancelLogout = () => {
+    setShowLogoutModal(false);
   };
 
   return (
@@ -229,7 +246,7 @@ export default function ProfileScreen({
 
         <TouchableOpacity
           style={styles.profileLogoutButton}
-          onPress={onLogout || (() => handlePress('Logout', 'Logout action can be connected here.'))}
+          onPress={handleLogout}
           activeOpacity={0.85}
         >
           <Ionicons name="log-out-outline" size={21} color="#EF4444" />
@@ -238,6 +255,40 @@ export default function ProfileScreen({
 
         <Text style={styles.profileVersionText}>Rapid Repair Version 2.4.1 (Build 402)</Text>
       </ScrollView>
+
+      <Modal
+        transparent
+        visible={showLogoutModal}
+        animationType="fade"
+        onRequestClose={handleCancelLogout}
+      >
+        <View style={styles.logoutModalOverlay}>
+          <View style={styles.logoutModalContent}>
+            <View style={styles.logoutModalIconWrap}>
+              <Ionicons name="log-out-outline" size={40} color="#EF4444" />
+            </View>
+            <Text style={styles.logoutModalTitle}>Logout</Text>
+            <Text style={styles.logoutModalMessage}>Are you sure you want to logout?</Text>
+            
+            <View style={styles.logoutModalButtonsRow}>
+              <TouchableOpacity
+                style={styles.logoutModalCancelButton}
+                onPress={handleCancelLogout}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.logoutModalCancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.logoutModalConfirmButton}
+                onPress={handleConfirmLogout}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.logoutModalConfirmButtonText}>Yes, Logout</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <View style={styles.homeBottomNavWrapper}>
         <View style={styles.bottomNav}>

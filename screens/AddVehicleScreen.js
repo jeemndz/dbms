@@ -6,6 +6,7 @@ import { styles } from '../styles';
 const fuelTypes = ['Gasoline', 'Diesel', 'Electric', 'Hybrid'];
 const transmissionTypes = ['Manual', 'Automatic', 'CVT', 'DCT', 'AMT'];
 const statuses = ['Active', 'Inactive'];
+
 const phBrandsModels = {
   Toyota: ['Vios', 'Wigo', 'Raize', 'Rush', 'Yaris Cross', 'Corolla Altis', 'Corolla Cross', 'Camry', 'Innova', 'Fortuner', 'Hilux', 'Land Cruiser Prado'],
   Mitsubishi: ['Mirage G4', 'Xpander', 'Xpander Cross', 'Montero Sport', 'Strada', 'L300', 'Outlander PHEV'],
@@ -62,6 +63,7 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
     status: statuses[0],
     dateAdded: getToday(),
   });
+
   const [isSaving, setIsSaving] = useState(false);
   const [openDropdown, setOpenDropdown] = useState(null);
 
@@ -71,9 +73,15 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
     [vehicleForm.make]
   );
 
+  const yearIsValid = useMemo(() => /^\d{4}$/.test(vehicleForm.year), [vehicleForm.year]);
+
   const isValid = useMemo(
-    () => vehicleForm.make.trim() && vehicleForm.model.trim() && vehicleForm.licensePlate.trim(),
-    [vehicleForm.make, vehicleForm.model, vehicleForm.licensePlate]
+    () =>
+      vehicleForm.make.trim() &&
+      vehicleForm.model.trim() &&
+      yearIsValid &&
+      vehicleForm.licensePlate.trim(),
+    [vehicleForm.make, vehicleForm.model, vehicleForm.licensePlate, yearIsValid]
   );
 
   const updateField = (field, value) => {
@@ -87,6 +95,11 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
     const currentIndex = options.indexOf(vehicleForm[field]);
     const nextIndex = currentIndex >= options.length - 1 ? 0 : currentIndex + 1;
     updateField(field, options[nextIndex]);
+  };
+
+  const selectOption = (field, value) => {
+    updateField(field, value);
+    setOpenDropdown(null);
   };
 
   const selectBrand = (brand) => {
@@ -104,8 +117,13 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
   };
 
   const handleSaveVehicle = async () => {
-    if (!isValid) {
+    if (!vehicleForm.make.trim() || !vehicleForm.model.trim() || !vehicleForm.licensePlate.trim()) {
       Alert.alert('Missing Required Fields', 'Please fill in Make, Model, and License Plate.');
+      return;
+    }
+
+    if (!yearIsValid) {
+      Alert.alert('Invalid Year', 'Please enter a valid 4-digit year.');
       return;
     }
 
@@ -118,6 +136,7 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
     }
 
     setIsSaving(true);
+
     try {
       await onCreateVehicle(vehicleForm);
       Alert.alert('Vehicle Saved', `${vehicleForm.make} ${vehicleForm.model} has been added.`);
@@ -126,7 +145,11 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
       }
     } catch (error) {
       const serverMessage =
-        error?.response?.data?.message || error?.response?.data || error?.message || 'Unable to save vehicle.';
+        error?.response?.data?.message ||
+        error?.response?.data ||
+        error?.message ||
+        'Unable to save vehicle.';
+
       Alert.alert('Save Failed', String(serverMessage));
     } finally {
       setIsSaving(false);
@@ -144,6 +167,7 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
           >
             <Ionicons name="arrow-back" size={24} color="#0F1F3A" />
           </TouchableOpacity>
+
           <Text style={styles.addVehicleHeaderTitle}>Vehicle Registration</Text>
           <View style={styles.addVehicleHeaderSpacer} />
         </View>
@@ -175,7 +199,6 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
               Alert.alert('Select Make First', 'Please select a vehicle make before choosing a model.');
               return;
             }
-
             setOpenDropdown('model');
           }}
           activeOpacity={0.85}
@@ -191,7 +214,7 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
           <Ionicons name="chevron-down" size={22} color="#5D6A7F" />
         </TouchableOpacity>
 
-        <Text style={styles.addVehicleFieldLabel}>Year</Text>
+        <Text style={styles.addVehicleFieldLabel}>Year *</Text>
         <TextInput
           value={vehicleForm.year}
           onChangeText={(value) => updateField('year', value.replace(/[^0-9]/g, '').slice(0, 4))}
@@ -199,12 +222,18 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
           placeholderTextColor="#8A9AB0"
           keyboardType="number-pad"
           style={styles.addVehicleInput}
+          maxLength={4}
         />
+        {!!vehicleForm.year && !yearIsValid && (
+          <Text style={{ color: '#C62828', marginTop: 6, marginBottom: 8 }}>
+            Year must be 4 digits.
+          </Text>
+        )}
 
         <Text style={styles.addVehicleFieldLabel}>Fuel Type</Text>
         <TouchableOpacity
           style={styles.addVehicleSelectRow}
-          onPress={() => cycleOption('fuelType', fuelTypes)}
+          onPress={() => setOpenDropdown('fuelType')}
           activeOpacity={0.85}
         >
           <Text style={styles.addVehicleSelectText}>{vehicleForm.fuelType}</Text>
@@ -214,7 +243,7 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
         <Text style={styles.addVehicleFieldLabel}>Transmission Type</Text>
         <TouchableOpacity
           style={styles.addVehicleSelectRow}
-          onPress={() => cycleOption('transmissionType', transmissionTypes)}
+          onPress={() => setOpenDropdown('transmissionType')}
           activeOpacity={0.85}
         >
           <Text style={styles.addVehicleSelectText}>{vehicleForm.transmissionType}</Text>
@@ -224,7 +253,7 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
         <Text style={styles.addVehicleFieldLabel}>Engine Number</Text>
         <TextInput
           value={vehicleForm.engineNumber}
-          onChangeText={(value) => updateField('engineNumber', value)}
+          onChangeText={(value) => updateField('engineNumber', value.toUpperCase())}
           placeholder="e.g. ABC123456"
           placeholderTextColor="#8A9AB0"
           autoCapitalize="characters"
@@ -241,7 +270,7 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
           style={styles.addVehicleInput}
         />
 
-        <Text style={styles.addVehicleFieldLabel}>License Plate</Text>
+        <Text style={styles.addVehicleFieldLabel}>License Plate *</Text>
         <TextInput
           value={vehicleForm.licensePlate}
           onChangeText={(value) => updateField('licensePlate', value.toUpperCase())}
@@ -264,11 +293,14 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
         <View style={styles.addVehicleVinWrap}>
           <TextInput
             value={vehicleForm.vin}
-            onChangeText={(value) => updateField('vin', value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 17))}
+            onChangeText={(value) =>
+              updateField('vin', value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 17))
+            }
             placeholder="17-digit VIN"
             placeholderTextColor="#8A9AB0"
             autoCapitalize="characters"
             style={styles.addVehicleVinInput}
+            maxLength={17}
           />
           <TouchableOpacity
             style={styles.addVehicleVinScanButton}
@@ -282,7 +314,7 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
         <Text style={styles.addVehicleFieldLabel}>Status</Text>
         <TouchableOpacity
           style={styles.addVehicleSelectRow}
-          onPress={() => cycleOption('status', statuses)}
+          onPress={() => setOpenDropdown('status')}
           activeOpacity={0.85}
         >
           <Text style={styles.addVehicleSelectText}>{vehicleForm.status}</Text>
@@ -299,7 +331,12 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
         />
 
         <View style={styles.addVehicleInfoCard}>
-          <Ionicons name="information-circle" size={22} color="#6A7788" style={styles.addVehicleInfoIcon} />
+          <Ionicons
+            name="information-circle"
+            size={22}
+            color="#6A7788"
+            style={styles.addVehicleInfoIcon}
+          />
           <Text style={styles.addVehicleInfoText}>
             Adding your VIN helps us identify parts specifically for your vehicle, ensuring more accurate
             repair estimates and maintenance schedules.
@@ -326,20 +363,73 @@ export default function AddVehicleScreen({ onCreateVehicle, onSelectTab }) {
         >
           <TouchableOpacity activeOpacity={1} style={styles.addVehicleDropdownCard} onPress={() => {}}>
             <Text style={styles.addVehicleDropdownTitle}>
-              {openDropdown === 'brand' ? 'Select Make' : 'Select Model'}
+              {openDropdown === 'brand' && 'Select Make'}
+              {openDropdown === 'model' && 'Select Model'}
+              {openDropdown === 'fuelType' && 'Select Fuel Type'}
+              {openDropdown === 'transmissionType' && 'Select Transmission Type'}
+              {openDropdown === 'status' && 'Select Status'}
             </Text>
 
             <ScrollView style={styles.addVehicleDropdownList} showsVerticalScrollIndicator={false}>
-              {(openDropdown === 'brand' ? brandOptions : modelOptions).map((option) => (
-                <TouchableOpacity
-                  key={option}
-                  style={styles.addVehicleDropdownItem}
-                  onPress={() => (openDropdown === 'brand' ? selectBrand(option) : selectModel(option))}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.addVehicleDropdownItemText}>{option}</Text>
-                </TouchableOpacity>
-              ))}
+              {openDropdown === 'brand' &&
+                brandOptions.map((option) => (
+                  <TouchableOpacity
+                    key={option}
+                    style={styles.addVehicleDropdownItem}
+                    onPress={() => selectBrand(option)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.addVehicleDropdownItemText}>{option}</Text>
+                  </TouchableOpacity>
+                ))}
+
+              {openDropdown === 'model' &&
+                modelOptions.map((option) => (
+                  <TouchableOpacity
+                    key={option}
+                    style={styles.addVehicleDropdownItem}
+                    onPress={() => selectModel(option)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.addVehicleDropdownItemText}>{option}</Text>
+                  </TouchableOpacity>
+                ))}
+
+              {openDropdown === 'fuelType' &&
+                fuelTypes.map((option) => (
+                  <TouchableOpacity
+                    key={option}
+                    style={styles.addVehicleDropdownItem}
+                    onPress={() => selectOption('fuelType', option)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.addVehicleDropdownItemText}>{option}</Text>
+                  </TouchableOpacity>
+                ))}
+
+              {openDropdown === 'transmissionType' &&
+                transmissionTypes.map((option) => (
+                  <TouchableOpacity
+                    key={option}
+                    style={styles.addVehicleDropdownItem}
+                    onPress={() => selectOption('transmissionType', option)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.addVehicleDropdownItemText}>{option}</Text>
+                  </TouchableOpacity>
+                ))}
+
+              {openDropdown === 'status' &&
+                statuses.map((option) => (
+                  <TouchableOpacity
+                    key={option}
+                    style={styles.addVehicleDropdownItem}
+                    onPress={() => selectOption('status', option)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.addVehicleDropdownItemText}>{option}</Text>
+                  </TouchableOpacity>
+                ))}
             </ScrollView>
           </TouchableOpacity>
         </TouchableOpacity>

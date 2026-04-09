@@ -3,34 +3,23 @@ import { Alert, ScrollView, Text, TextInput, TouchableOpacity, View } from 'reac
 import { Ionicons } from '@expo/vector-icons';
 import { styles } from '../styles.js';
 import { fetchServices } from '../services/serviceApi';
-
-const vehicles = [
-  {
-    id: 'v1',
-    name: 'Primary',
-    model: '2018 Honda Civic',
-    license: 'ABC-1234',
-    icon: 'car-sport-outline',
-  },
-  {
-    id: 'v2',
-    name: 'Secondary',
-    model: '2022 Toyota Camry',
-    license: 'XYZ-9876',
-    icon: 'car-outline',
-  },
-];
-
-// Services are loaded from the backend for the active tenant
+import { fetchVehiclesByUser } from '../services/vehicleApi';
+import { createAppointment } from '../services/appointmentApi';
 
 const weekDays = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
-const addMonths = (date, monthsToAdd) => new Date(date.getFullYear(), date.getMonth() + monthsToAdd, 1);
+const addMonths = (date, monthsToAdd) =>
+  new Date(date.getFullYear(), date.getMonth() + monthsToAdd, 1);
 
 const isSameDay = (leftDate, rightDate) =>
   leftDate.getFullYear() === rightDate.getFullYear() &&
   leftDate.getMonth() === rightDate.getMonth() &&
   leftDate.getDate() === rightDate.getDate();
+
+const startOfDay = (date) =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const isPastDate = (date, today) => startOfDay(date) < startOfDay(today);
 
 const getCalendarCells = (visibleMonth) => {
   const year = visibleMonth.getFullYear();
@@ -77,56 +66,184 @@ const timeSlots = [
   { id: '05:30 PM', disabled: true },
 ];
 
-export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab, onLogout }) {
-    const [services, setServices] = useState([]);
-    const [servicesLoading, setServicesLoading] = useState(true);
-    const [servicesError, setServicesError] = useState(null);
+const formatVehicleForCard = (vehicle) => {
+  const year = vehicle?.year_model || '';
+  const brand = vehicle?.brand || '';
+  const model = vehicle?.model || '';
+  return `${year} ${brand} ${model}`.trim();
+};
+
+const getVehicleCardName = (vehicle, index) => {
+  if (vehicle?.plate_number) {
+    return vehicle.plate_number;
+  }
+  return `Vehicle ${index + 1}`;
+};
+
+const parsePositiveNumber = (value) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return parsed;
+};
+
+const convertTo24HourFormat = (time12) => {
+  const [time, period] = time12.split(' ');
+  let [hours, minutes] = time.split(':').map(Number);
+
+  if (period === 'PM' && hours !== 12) {
+    hours += 12;
+  } else if (period === 'AM' && hours === 12) {
+    hours = 0;
+  }
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+};
+
+export default function BookServiceScreen({
+  activeTab,
+  tenantID,
+  user_id,
+  userId,
+  onSelectTab,
+  onLogout,
+}) {
+  const [services, setServices] = useState([]);
+  const [servicesLoading, setServicesLoading] = useState(true);
+  const [servicesError, setServicesError] = useState(null);
+
+  const [vehicles, setVehicles] = useState([]);
+  const [vehiclesLoading, setVehiclesLoading] = useState(true);
+  const [vehiclesError, setVehiclesError] = useState(null);
+
+  const [bookingSubmitting, setBookingSubmitting] = useState(false);
+  const [bookingError, setBookingError] = useState(null);
+
   const today = useMemo(() => new Date(), []);
   const [currentStep, setCurrentStep] = useState(1);
-  const [selectedVehicleId, setSelectedVehicleId] = useState(vehicles[0].id);
+  const [selectedVehicleId, setSelectedVehicleId] = useState(null);
   const [selectedServiceIds, setSelectedServiceIds] = useState([]);
-    // Fetch services for the active tenant
-    useEffect(() => {
-      let isMounted = true;
-      setServicesLoading(true);
-      setServicesError(null);
-
-      if (!Number.isFinite(Number(tenantID)) || Number(tenantID) <= 0) {
-        setServices([]);
-        setServicesError('Invalid tenantID. Please log in again.');
-        setServicesLoading(false);
-        return () => {
-          isMounted = false;
-        };
-      }
-
-      fetchServices({ tenantID })
-        .then((data) => {
-          if (isMounted) {
-            setServices(data.map((s) => ({
-              id: String(s.service_id),
-              title: s.service_name,
-              description: s.description,
-              price: Number(s.price),
-            })));
-            setSelectedServiceIds([]);
-          }
-        })
-        .catch((err) => {
-          if (isMounted) setServicesError(err.message || 'Failed to load services.');
-        })
-        .finally(() => {
-          if (isMounted) setServicesLoading(false);
-        });
-      return () => { isMounted = false; };
-    }, [tenantID]);
   const [visibleMonth, setVisibleMonth] = useState(
     () => new Date(today.getFullYear(), today.getMonth(), 1)
   );
   const [selectedDate, setSelectedDate] = useState(today);
   const [selectedTime, setSelectedTime] = useState('10:30 AM');
   const [notes, setNotes] = useState('');
-  const [confirmationNumber, setConfirmationNumber] = useState('RR-98421');
+  const [confirmationNumber, setConfirmationNumber] = useState('RR-00000');
+
+  const normalizedTenantID = parsePositiveNumber(tenantID) || 1;
+  const resolvedUserId = user_id ?? userId;
+  const normalizedUserId = parsePositiveNumber(resolvedUserId);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    setServicesLoading(true);
+    setServicesError(null);
+
+    fetchServices({ tenantID: normalizedTenantID })
+      .then((data) => {
+        if (!isMounted) return;
+
+        const mappedServices = Array.isArray(data)
+          ? data.map((service) => ({
+            id: String(service.id ?? service.service_id),
+            title: service.service_name ?? service.title ?? 'Unnamed Service',
+            description: service.description ?? '',
+            price: Number(service.price || 0),
+          }))
+          : [];
+
+        setServices(mappedServices);
+        setSelectedServiceIds([]);
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        setServices([]);
+        setServicesError(err?.message || 'Failed to load services.');
+      })
+      .finally(() => {
+        if (isMounted) {
+          setServicesLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [normalizedTenantID]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    setVehiclesLoading(true);
+    setVehiclesError(null);
+
+    if (!normalizedUserId) {
+      setVehicles([]);
+      setSelectedVehicleId(null);
+      setVehiclesError('Please log in to view your vehicles.');
+      setVehiclesLoading(false);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    fetchVehiclesByUser({
+      tenantID: normalizedTenantID,
+      user_id: normalizedUserId,
+    })
+      .then((data) => {
+        if (!isMounted) return;
+
+        const safeData = Array.isArray(data) ? data : [];
+
+        const mappedVehicles = safeData.map((vehicle, index) => ({
+          id: String(vehicle.vehicle_id),
+          vehicle_id: String(vehicle.vehicle_id),
+          name: getVehicleCardName(vehicle, index),
+          model: formatVehicleForCard(vehicle),
+          license: vehicle.plate_number || 'No plate number',
+          icon: 'car-sport-outline',
+          raw: vehicle,
+        }));
+
+        setVehicles(mappedVehicles);
+
+        if (mappedVehicles.length > 0) {
+          setSelectedVehicleId((prev) =>
+            prev && mappedVehicles.some((vehicle) => vehicle.id === prev)
+              ? prev
+              : mappedVehicles[0].id
+          );
+          setVehiclesError(null);
+        } else {
+          setSelectedVehicleId(null);
+          setVehiclesError('No vehicles found for this account.');
+        }
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        setVehicles([]);
+        setSelectedVehicleId(null);
+        setVehiclesError(err?.message || 'Failed to load vehicles.');
+      })
+      .finally(() => {
+        if (isMounted) {
+          setVehiclesLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [normalizedTenantID, normalizedUserId]);
 
   const isTabActive = (tab) => activeTab === tab;
 
@@ -135,7 +252,6 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
       if (previousIds.includes(serviceId)) {
         return previousIds.filter((id) => id !== serviceId);
       }
-
       return [...previousIds, serviceId];
     });
   };
@@ -148,7 +264,28 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
     [selectedServiceIds, services]
   );
 
+  const selectedVehicle = useMemo(
+    () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) || null,
+    [selectedVehicleId, vehicles]
+  );
+
+  const selectedServices = useMemo(
+    () => services.filter((service) => selectedServiceIds.includes(service.id)),
+    [selectedServiceIds, services]
+  );
+
+  const canProceedStepOne =
+    !vehiclesLoading &&
+    !servicesLoading &&
+    !!selectedVehicleId &&
+    selectedServiceIds.length > 0;
+
   const handleNextStep = () => {
+    if (!selectedVehicleId) {
+      Alert.alert('Select a Vehicle', 'Please choose a vehicle before continuing.');
+      return;
+    }
+
     if (selectedServiceIds.length === 0) {
       Alert.alert('Select a Service', 'Please pick at least one service before continuing.');
       return;
@@ -157,29 +294,90 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
     setCurrentStep(2);
   };
 
-  const handleConfirmBooking = () => {
+  const handleConfirmBooking = async () => {
     if (!selectedTime) {
       Alert.alert('Select a Time', 'Please choose an available time slot before confirming.');
       return;
     }
 
-    const generatedNumber = `RR-${Math.floor(10000 + Math.random() * 90000)}`;
-    setConfirmationNumber(generatedNumber);
-    setCurrentStep(3);
+    if (!selectedVehicleId || !normalizedUserId || !normalizedTenantID) {
+      Alert.alert('Error', 'Missing required booking information. Please try again.');
+      return;
+    }
+
+    if (isPastDate(selectedDate, today)) {
+      Alert.alert('Invalid Date', 'Please select today or a future date.');
+      return;
+    }
+
+    const validSelectedServiceIds = selectedServiceIds.filter((selectedId) =>
+      services.some((service) => service.id === selectedId)
+    );
+
+    if (validSelectedServiceIds.length === 0) {
+      Alert.alert('Select a Service', 'Please pick at least one valid service.');
+      return;
+    }
+
+    setBookingSubmitting(true);
+    setBookingError(null);
+
+    try {
+      const appointmentTime = convertTo24HourFormat(selectedTime);
+
+      const year = selectedDate.getFullYear();
+      const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+      const day = String(selectedDate.getDate()).padStart(2, '0');
+      const appointmentDate = `${year}-${month}-${day}`;
+
+      const payload = {
+        tenantID: normalizedTenantID,
+        user_id: normalizedUserId,
+        vehicle_id: Number(selectedVehicleId),
+        appointment_date: appointmentDate,
+        appointment_time: appointmentTime,
+        service_ids: validSelectedServiceIds.map((id) => Number(id)),
+        total_amount: Number(total),
+        notes: String(notes || ''),
+      };
+
+      console.log('BOOKING SCREEN CONTEXT', {
+        tenantID,
+        normalizedTenantID,
+        user_id,
+        userId,
+        resolvedUserId,
+        normalizedUserId,
+        selectedVehicleId,
+        validSelectedServiceIds,
+        total,
+      });
+
+      console.log('BOOKING FINAL PAYLOAD', payload);
+
+      const response = await createAppointment(payload);
+
+      setCurrentStep(3);
+
+      Alert.alert(
+        'Appointment Submitted',
+        'Your appointment has been submitted for review. You will receive confirmation once it is approved.'
+      );
+    } catch (error) {
+      const errorMsg = error?.message || 'Failed to create booking. Please try again.';
+      console.log('BOOKING SCREEN ERROR', error);
+      setBookingError(errorMsg);
+      Alert.alert('Booking Error', errorMsg);
+    } finally {
+      setBookingSubmitting(false);
+    }
   };
 
   const selectedCount = selectedServiceIds.length;
   const selectedLabel = `${selectedCount} Service${selectedCount === 1 ? '' : 's'} Selected`;
   const monthLabel = visibleMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   const calendarCells = useMemo(() => getCalendarCells(visibleMonth), [visibleMonth]);
-  const selectedVehicle = useMemo(
-    () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) || vehicles[0],
-    [selectedVehicleId]
-  );
-  const selectedServices = useMemo(
-    () => services.filter((service) => selectedServiceIds.includes(service.id)),
-    [selectedServiceIds, services]
-  );
+
   const selectedDateLabel = selectedDate.toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',
@@ -206,6 +404,11 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
   };
 
   const handleSelectDate = (date) => {
+    if (isPastDate(date, today)) {
+      Alert.alert('Invalid Date', 'Please select today or a future date.');
+      return;
+    }
+
     setSelectedDate(date);
     setVisibleMonth(new Date(date.getFullYear(), date.getMonth(), 1));
   };
@@ -216,6 +419,7 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
         <Text style={styles.bookServiceStepText}>STEP 1 OF 3</Text>
         <Text style={styles.bookServiceStepPercent}>33% COMPLETE</Text>
       </View>
+
       <View style={styles.bookServiceProgressTrack}>
         <View style={styles.bookServiceProgressFill} />
       </View>
@@ -223,51 +427,70 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
       <View style={styles.bookServiceSectionHeader}>
         <Text style={styles.bookServiceSectionTitle}>Select Vehicle</Text>
         <TouchableOpacity
-          onPress={() => Alert.alert('Add Vehicle', 'Vehicle creation can be connected here.')}
+          onPress={() => onSelectTab && onSelectTab('profile')}
           activeOpacity={0.85}
         >
           <Text style={styles.bookServiceAddNew}>ADD NEW</Text>
         </TouchableOpacity>
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.bookServiceVehicleList}
-      >
-        {vehicles.map((vehicle) => {
-          const isSelected = vehicle.id === selectedVehicleId;
-          return (
-            <TouchableOpacity
-              key={vehicle.id}
-              style={[
-                styles.bookServiceVehicleCard,
-                isSelected && styles.bookServiceVehicleCardSelected,
-              ]}
-              onPress={() => setSelectedVehicleId(vehicle.id)}
-              activeOpacity={0.9}
-            >
-              <View style={styles.bookServiceVehicleTopRow}>
-                <View style={styles.bookServiceVehicleIconWrap}>
-                  <Ionicons name={vehicle.icon} size={21} color="#334155" />
-                </View>
-                {isSelected ? (
-                  <View style={styles.bookServiceVehicleCheck}>
-                    <Ionicons name="checkmark" size={15} color="#FFFFFF" />
+      {vehiclesLoading ? (
+        <Text style={{ marginVertical: 12, color: '#64748B' }}>Loading vehicles...</Text>
+      ) : vehiclesError ? (
+        <Text style={{ marginVertical: 12, color: 'red' }}>{vehiclesError}</Text>
+      ) : vehicles.length === 0 ? (
+        <View style={{ marginVertical: 12 }}>
+          <Text style={{ color: '#64748B', marginBottom: 10 }}>No vehicles found.</Text>
+          <TouchableOpacity
+            onPress={() => onSelectTab && onSelectTab('profile')}
+            activeOpacity={0.85}
+          >
+            <Text style={{ color: '#0F1F3A', fontWeight: '700' }}>
+              Go to profile and add a vehicle
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.bookServiceVehicleList}
+        >
+          {vehicles.map((vehicle) => {
+            const isSelected = vehicle.id === selectedVehicleId;
+
+            return (
+              <TouchableOpacity
+                key={vehicle.id}
+                style={[
+                  styles.bookServiceVehicleCard,
+                  isSelected && styles.bookServiceVehicleCardSelected,
+                ]}
+                onPress={() => setSelectedVehicleId(vehicle.id)}
+                activeOpacity={0.9}
+              >
+                <View style={styles.bookServiceVehicleTopRow}>
+                  <View style={styles.bookServiceVehicleIconWrap}>
+                    <Ionicons name={vehicle.icon} size={21} color="#334155" />
                   </View>
-                ) : null}
-              </View>
+                  {isSelected ? (
+                    <View style={styles.bookServiceVehicleCheck}>
+                      <Ionicons name="checkmark" size={15} color="#FFFFFF" />
+                    </View>
+                  ) : null}
+                </View>
 
-              <Text style={styles.bookServiceVehicleName}>{vehicle.name}</Text>
-              <Text style={styles.bookServiceVehicleModel}>{vehicle.model}</Text>
-              <Text style={styles.bookServiceVehicleLicense}>License: {vehicle.license}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
+                <Text style={styles.bookServiceVehicleName}>{vehicle.name}</Text>
+                <Text style={styles.bookServiceVehicleModel}>{vehicle.model}</Text>
+                <Text style={styles.bookServiceVehicleLicense}>License: {vehicle.license}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      )}
 
       <Text style={styles.bookServiceSectionTitle}>Select Services</Text>
+
       {servicesLoading ? (
         <Text style={{ marginVertical: 12, color: '#64748B' }}>Loading services...</Text>
       ) : servicesError ? (
@@ -277,6 +500,7 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
       ) : (
         services.map((service) => {
           const isSelected = selectedServiceIds.includes(service.id);
+
           return (
             <TouchableOpacity
               key={service.id}
@@ -284,7 +508,12 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
               onPress={() => toggleService(service.id)}
               activeOpacity={0.9}
             >
-              <View style={[styles.bookServiceCheckBox, isSelected && styles.bookServiceCheckBoxSelected]}>
+              <View
+                style={[
+                  styles.bookServiceCheckBox,
+                  isSelected && styles.bookServiceCheckBoxSelected,
+                ]}
+              >
                 {isSelected ? <Ionicons name="checkmark" size={17} color="#FFFFFF" /> : null}
               </View>
 
@@ -293,7 +522,9 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
                 <Text style={styles.bookServiceServiceDescription}>{service.description}</Text>
               </View>
 
-              <Text style={styles.bookServiceServicePrice}>${service.price}</Text>
+              <Text style={styles.bookServiceServicePrice}>
+                ₱{Number(service.price || 0).toFixed(2)}
+              </Text>
             </TouchableOpacity>
           );
         })
@@ -302,7 +533,7 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
       <View style={styles.bookServiceTotalCard}>
         <View>
           <Text style={styles.bookServiceTotalLabel}>ESTIMATED TOTAL</Text>
-          <Text style={styles.bookServiceTotalValue}>${total.toFixed(2)}</Text>
+          <Text style={styles.bookServiceTotalValue}>₱{total.toFixed(2)}</Text>
         </View>
         <View style={styles.bookServiceTotalMetaWrap}>
           <Text style={styles.bookServiceTotalMeta}>{selectedLabel}</Text>
@@ -310,9 +541,19 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
         </View>
       </View>
 
-      <TouchableOpacity style={styles.bookServiceNextButton} onPress={handleNextStep} activeOpacity={0.9}>
+      <TouchableOpacity
+        style={[styles.bookServiceNextButton, !canProceedStepOne && { opacity: 0.6 }]}
+        onPress={handleNextStep}
+        activeOpacity={0.9}
+        disabled={!canProceedStepOne}
+      >
         <Text style={styles.bookServiceNextButtonText}>Next Step</Text>
-        <Ionicons name="arrow-forward" size={22} color="#FFFFFF" style={styles.bookServiceNextIcon} />
+        <Ionicons
+          name="arrow-forward"
+          size={22}
+          color="#FFFFFF"
+          style={styles.bookServiceNextIcon}
+        />
       </TouchableOpacity>
     </>
   );
@@ -322,6 +563,7 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
       <View style={styles.bookServiceStepRowStepTwo}>
         <Text style={styles.bookServiceStepText}>STEP 2 OF 3</Text>
       </View>
+
       <Text style={styles.bookServiceStepTitle}>Schedule Appointment</Text>
 
       <View style={styles.bookServiceProgressSegmentsRow}>
@@ -362,18 +604,25 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
         <View style={styles.bookServiceCalendarDaysGrid}>
           {calendarCells.map((cell) => {
             const isSelected = isSameDay(cell.date, selectedDate);
+            const isDisabledPastDate = isPastDate(cell.date, today);
             const dayLabel = String(cell.date.getDate());
 
             return (
               <TouchableOpacity
                 key={`day-${cell.date.toISOString()}`}
-                style={[styles.bookServiceCalendarCell, isSelected && styles.bookServiceCalendarCellSelected]}
+                style={[
+                  styles.bookServiceCalendarCell,
+                  isSelected && styles.bookServiceCalendarCellSelected,
+                  isDisabledPastDate && { opacity: 0.45 },
+                ]}
                 onPress={() => handleSelectDate(cell.date)}
                 activeOpacity={0.85}
               >
                 <Text
                   style={[
-                    cell.isCurrentMonth ? styles.bookServiceCalendarDay : styles.bookServiceCalendarDayMuted,
+                    cell.isCurrentMonth
+                      ? styles.bookServiceCalendarDay
+                      : styles.bookServiceCalendarDayMuted,
                     isSelected && styles.bookServiceCalendarDaySelected,
                   ]}
                 >
@@ -435,9 +684,27 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
         textAlignVertical="top"
       />
 
-      <TouchableOpacity style={styles.bookServiceNextButton} onPress={handleConfirmBooking} activeOpacity={0.9}>
-        <Text style={styles.bookServiceNextButtonText}>Confirm Booking</Text>
-        <Ionicons name="arrow-forward" size={22} color="#FFFFFF" style={styles.bookServiceNextIcon} />
+      {bookingError ? (
+        <Text style={{ color: 'red', marginBottom: 12 }}>{bookingError}</Text>
+      ) : null}
+
+      <TouchableOpacity
+        style={[styles.bookServiceNextButton, bookingSubmitting && { opacity: 0.6 }]}
+        onPress={handleConfirmBooking}
+        activeOpacity={0.9}
+        disabled={bookingSubmitting}
+      >
+        <Text style={styles.bookServiceNextButtonText}>
+          {bookingSubmitting ? 'Submitting...' : 'Confirm Booking'}
+        </Text>
+        {!bookingSubmitting ? (
+          <Ionicons
+            name="arrow-forward"
+            size={22}
+            color="#FFFFFF"
+            style={styles.bookServiceNextIcon}
+          />
+        ) : null}
       </TouchableOpacity>
     </>
   );
@@ -477,12 +744,24 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
         </View>
         <View style={styles.bookServiceBreakdownContent}>
           <Text style={styles.bookServiceBreakdownLabel}>Selected Vehicle</Text>
-          <Text style={styles.bookServiceBreakdownValue}>{selectedVehicle.model}</Text>
+          <Text style={styles.bookServiceBreakdownValue}>
+            {selectedVehicle?.model || 'No vehicle selected'}
+          </Text>
+          {!!selectedVehicle?.license && (
+            <Text style={{ color: '#64748B', marginTop: 4 }}>
+              Plate: {selectedVehicle.license}
+            </Text>
+          )}
         </View>
       </View>
 
       <View style={[styles.bookServiceBreakdownCard, styles.bookServiceBreakdownCardDark]}>
-        <View style={[styles.bookServiceBreakdownIconWrap, styles.bookServiceBreakdownIconWrapDark]}>
+        <View
+          style={[
+            styles.bookServiceBreakdownIconWrap,
+            styles.bookServiceBreakdownIconWrapDark,
+          ]}
+        >
           <Ionicons name="cash-outline" size={20} color="#E2E8F0" />
         </View>
         <View style={styles.bookServiceBreakdownContent}>
@@ -527,11 +806,18 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
 
       <TouchableOpacity
         style={styles.bookServiceNextButton}
-        onPress={() => Alert.alert('Calendar', 'Add to calendar integration can be connected here.')}
+        onPress={() =>
+          Alert.alert('Calendar', 'Add to calendar integration can be connected here.')
+        }
         activeOpacity={0.9}
       >
         <Ionicons name="calendar-outline" size={20} color="#FFFFFF" />
-        <Text style={[styles.bookServiceNextButtonText, styles.bookServiceStepThreePrimaryButtonText]}>
+        <Text
+          style={[
+            styles.bookServiceNextButtonText,
+            styles.bookServiceStepThreePrimaryButtonText,
+          ]}
+        >
           Add to Calendar
         </Text>
       </TouchableOpacity>
@@ -542,14 +828,19 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
         activeOpacity={0.9}
       >
         <Ionicons name="grid-outline" size={20} color="#0F1F3A" />
-        <Text style={styles.bookServiceStepThreeSecondaryButtonText}>Back to Dashboard</Text>
+        <Text style={styles.bookServiceStepThreeSecondaryButtonText}>
+          Back to Dashboard
+        </Text>
       </TouchableOpacity>
     </>
   );
 
   return (
     <View style={styles.bookServiceContainer}>
-      <ScrollView contentContainerStyle={styles.bookServiceScrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.bookServiceScrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.bookServiceHeaderRow}>
           <TouchableOpacity
             style={styles.bookServiceBackButton}
@@ -558,7 +849,9 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
           >
             <Ionicons name="arrow-back" size={24} color="#0F1F3A" />
           </TouchableOpacity>
+
           <Text style={styles.bookServiceHeaderTitle}>Book Service</Text>
+
           <TouchableOpacity
             style={styles.bookServiceMoreButton}
             onPress={() => Alert.alert('More', 'Additional options can be added here.')}
@@ -570,7 +863,11 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
 
         <View style={styles.bookServiceDivider} />
 
-        {currentStep === 1 ? renderStepOne() : currentStep === 2 ? renderStepTwo() : renderStepThree()}
+        {currentStep === 1
+          ? renderStepOne()
+          : currentStep === 2
+            ? renderStepTwo()
+            : renderStepThree()}
       </ScrollView>
 
       {currentStep !== 3 ? (
@@ -580,8 +877,14 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
               style={[styles.navItem, isTabActive('home') && styles.navItemSelected]}
               onPress={() => onSelectTab && onSelectTab('home')}
             >
-              <Ionicons name="home" size={22} color={isTabActive('home') ? '#0F172A' : '#94A3B8'} />
-              <Text style={[styles.navLabel, isTabActive('home') && styles.navLabelActive]}>Home</Text>
+              <Ionicons
+                name="home"
+                size={22}
+                color={isTabActive('home') ? '#0F172A' : '#94A3B8'}
+              />
+              <Text style={[styles.navLabel, isTabActive('home') && styles.navLabelActive]}>
+                Home
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -593,7 +896,12 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
                 size={22}
                 color={isTabActive('appointments') ? '#0F172A' : '#94A3B8'}
               />
-              <Text style={[styles.navLabel, isTabActive('appointments') && styles.navLabelActive]}>
+              <Text
+                style={[
+                  styles.navLabel,
+                  isTabActive('appointments') && styles.navLabelActive,
+                ]}
+              >
                 Bookings
               </Text>
             </TouchableOpacity>
@@ -602,16 +910,28 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
               style={[styles.navItem, isTabActive('history') && styles.navItemSelected]}
               onPress={() => onSelectTab && onSelectTab('history')}
             >
-              <Ionicons name="time-outline" size={22} color={isTabActive('history') ? '#0F172A' : '#94A3B8'} />
-              <Text style={[styles.navLabel, isTabActive('history') && styles.navLabelActive]}>History</Text>
+              <Ionicons
+                name="time-outline"
+                size={22}
+                color={isTabActive('history') ? '#0F172A' : '#94A3B8'}
+              />
+              <Text style={[styles.navLabel, isTabActive('history') && styles.navLabelActive]}>
+                History
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[styles.navItem, isTabActive('payments') && styles.navItemSelected]}
               onPress={() => onSelectTab && onSelectTab('payments')}
             >
-              <Ionicons name="card-outline" size={22} color={isTabActive('payments') ? '#0F172A' : '#94A3B8'} />
-              <Text style={[styles.navLabel, isTabActive('payments') && styles.navLabelActive]}>Payments</Text>
+              <Ionicons
+                name="card-outline"
+                size={22}
+                color={isTabActive('payments') ? '#0F172A' : '#94A3B8'}
+              />
+              <Text style={[styles.navLabel, isTabActive('payments') && styles.navLabelActive]}>
+                Payments
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -619,8 +939,14 @@ export default function BookServiceScreen({ activeTab, tenantID = 1, onSelectTab
               onPress={() => onSelectTab && onSelectTab('profile')}
               onLongPress={onLogout}
             >
-              <Ionicons name="person-outline" size={22} color={isTabActive('profile') ? '#0F172A' : '#94A3B8'} />
-              <Text style={[styles.navLabel, isTabActive('profile') && styles.navLabelActive]}>Profile</Text>
+              <Ionicons
+                name="person-outline"
+                size={22}
+                color={isTabActive('profile') ? '#0F172A' : '#94A3B8'}
+              />
+              <Text style={[styles.navLabel, isTabActive('profile') && styles.navLabelActive]}>
+                Profile
+              </Text>
             </TouchableOpacity>
           </View>
         </View>

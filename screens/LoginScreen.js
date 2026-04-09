@@ -21,8 +21,6 @@ export default function LoginScreen({
   onCreateAccount,
   onLogin,
   onForgotPassword,
-  onGoogleLogin,
-  onAppleLogin,
 }) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -140,7 +138,7 @@ export default function LoginScreen({
 
   return (
     <>
-      <Text style={styles.pageTitle}>Welcome Back</Text>
+      <Text style={styles.pageTitle}>Welcome</Text>
       <Text style={styles.pageSubtitle}>Log in to manage your repairs</Text>
 
       {/* Header Card with Image */}
@@ -162,7 +160,7 @@ export default function LoginScreen({
           <TextInput
             value={identifier}
             onChangeText={setIdentifier}
-            placeholder="name@example.com or username"
+            placeholder="Email or Username"
             placeholderTextColor="#9AA3B1"
             style={styles.input}
             autoCapitalize="none"
@@ -209,38 +207,7 @@ export default function LoginScreen({
           <Ionicons name="arrow-forward" size={18} color="white" style={styles.buttonIcon} />
         </TouchableOpacity>
 
-        {/* Divider */}
-        <View style={styles.dividerRow}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>Or continue with</Text>
-          <View style={styles.dividerLine} />
-        </View>
 
-        {/* Social Buttons */}
-        <View style={styles.socialRow}>
-          <TouchableOpacity
-            style={styles.socialButton}
-            activeOpacity={0.85}
-            onPress={
-              onGoogleLogin ||
-              (() => Alert.alert('Google Login', 'Google sign-in is not connected yet.'))
-            }
-          >
-            <FontAwesome name="google" size={18} color="#3C3C43" style={styles.socialIcon} />
-            <Text style={styles.socialText}>Google</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.socialButton}
-            activeOpacity={0.85}
-            onPress={
-              onAppleLogin ||
-              (() => Alert.alert('Apple Login', 'Apple sign-in is not connected yet.'))
-            }
-          >
-            <FontAwesome name="apple" size={18} color="#3C3C43" style={styles.socialIcon} />
-            <Text style={styles.socialText}>Apple</Text>
-          </TouchableOpacity>
-        </View>
 
         {/* Create Account */}
         <View style={styles.bottomRow}>

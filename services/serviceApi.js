@@ -3,8 +3,6 @@ import axios from 'axios';
 const API_BASE_URL = 'https://rapidrepair-gygpcbczgyg0czek.southeastasia-01.azurewebsites.net';
 const SERVICE_LIST_ENDPOINTS = [
   `${API_BASE_URL}/services_list.php`,
-  `${API_BASE_URL}/mobileapis/services_list.php`,
-  `${API_BASE_URL}/mobileapis/serviceAPI.php`,
   `${API_BASE_URL}/serviceAPI.php`,
 ];
 
