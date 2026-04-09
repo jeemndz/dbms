@@ -137,7 +137,7 @@ export default function BookServiceScreen({
   const [notes, setNotes] = useState('');
   const [confirmationNumber, setConfirmationNumber] = useState('RR-00000');
 
-  const normalizedTenantID = parsePositiveNumber(tenantID) || 1;
+  const normalizedTenantID = parsePositiveNumber(tenantID);
   const resolvedUserId = user_id ?? userId;
   const normalizedUserId = parsePositiveNumber(resolvedUserId);
 
@@ -147,17 +147,27 @@ export default function BookServiceScreen({
     setServicesLoading(true);
     setServicesError(null);
 
+    if (!normalizedTenantID) {
+      setServices([]);
+      setSelectedServiceIds([]);
+      setServicesError('Missing tenant information. Please log in again.');
+      setServicesLoading(false);
+      return () => {
+        isMounted = false;
+      };
+    }
+
     fetchServices({ tenantID: normalizedTenantID })
       .then((data) => {
         if (!isMounted) return;
 
         const mappedServices = Array.isArray(data)
           ? data.map((service) => ({
-            id: String(service.id ?? service.service_id),
-            title: service.service_name ?? service.title ?? 'Unnamed Service',
-            description: service.description ?? '',
-            price: Number(service.price || 0),
-          }))
+              id: String(service.id ?? service.service_id),
+              title: service.service_name ?? service.title ?? 'Unnamed Service',
+              description: service.description ?? '',
+              price: Number(service.price || 0),
+            }))
           : [];
 
         setServices(mappedServices);
@@ -184,6 +194,16 @@ export default function BookServiceScreen({
 
     setVehiclesLoading(true);
     setVehiclesError(null);
+
+    if (!normalizedTenantID) {
+      setVehicles([]);
+      setSelectedVehicleId(null);
+      setVehiclesError('Missing tenant information. Please log in again.');
+      setVehiclesLoading(false);
+      return () => {
+        isMounted = false;
+      };
+    }
 
     if (!normalizedUserId) {
       setVehicles([]);
@@ -278,9 +298,16 @@ export default function BookServiceScreen({
     !vehiclesLoading &&
     !servicesLoading &&
     !!selectedVehicleId &&
-    selectedServiceIds.length > 0;
+    selectedServiceIds.length > 0 &&
+    !!normalizedTenantID &&
+    !!normalizedUserId;
 
   const handleNextStep = () => {
+    if (!normalizedTenantID || !normalizedUserId) {
+      Alert.alert('Error', 'Missing account information. Please log in again.');
+      return;
+    }
+
     if (!selectedVehicleId) {
       Alert.alert('Select a Vehicle', 'Please choose a vehicle before continuing.');
       return;
@@ -356,6 +383,12 @@ export default function BookServiceScreen({
       console.log('BOOKING FINAL PAYLOAD', payload);
 
       const response = await createAppointment(payload);
+
+      setConfirmationNumber(
+        response?.job_order_no ||
+          response?.referenceNumber ||
+          `RR-${String(response?.appointment_id || '00000').padStart(5, '0')}`
+      );
 
       setCurrentStep(3);
 
@@ -866,8 +899,8 @@ export default function BookServiceScreen({
         {currentStep === 1
           ? renderStepOne()
           : currentStep === 2
-            ? renderStepTwo()
-            : renderStepThree()}
+          ? renderStepTwo()
+          : renderStepThree()}
       </ScrollView>
 
       {currentStep !== 3 ? (

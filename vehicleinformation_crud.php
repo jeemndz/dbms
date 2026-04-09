@@ -56,7 +56,7 @@ function getConnection()
 {
     global $conn;
 
-    if (!$conn || !$conn->ping()) {
+    if (!$conn || !$conn->query('SELECT 1')) {
         errorResponse('Database connection lost', 500);
     }
 

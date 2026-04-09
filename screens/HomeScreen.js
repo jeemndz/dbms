@@ -87,17 +87,18 @@ export default function HomeScreen({
       currentUser?.tenantid ??
       currentUser?.TenantID ??
       currentUser?.tenant ??
-      1
+      0
   );
 
-  const resolvedUserId =
+  const resolvedUserId = Number(
     currentUser?.user_id ??
-    currentUser?.userId ??
-    currentUser?.userid ??
-    currentUser?.userID ??
-    currentUser?.UserID ??
-    currentUser?.id ??
-    null;
+      currentUser?.userId ??
+      currentUser?.userid ??
+      currentUser?.userID ??
+      currentUser?.UserID ??
+      currentUser?.id ??
+      0
+  );
 
   console.log('HomeScreen currentUser:', currentUser);
   console.log('HomeScreen resolvedTenantID:', resolvedTenantID);
@@ -154,6 +155,8 @@ export default function HomeScreen({
     return (
       <PaymentsScreen
         activeTab={activeTab}
+        tenantID={resolvedTenantID}
+        user_id={resolvedUserId}
         onSelectTab={handleTabSelect}
       />
     );
@@ -163,6 +166,8 @@ export default function HomeScreen({
     return (
       <HistoryScreen
         activeTab={activeTab}
+        tenantID={resolvedTenantID}
+        user_id={resolvedUserId}
         onSelectTab={handleTabSelect}
       />
     );
@@ -328,7 +333,7 @@ export default function HomeScreen({
           <TouchableOpacity
             style={styles.actionCard}
             activeOpacity={0.85}
-            onPress={() => handleQuickAction('Vehicle List')}
+            onPress={() => handleTabSelect('vehicleList')}
           >
             <View style={styles.actionIcon}>
               <Ionicons name="car-outline" size={20} color="#0F172A" />
@@ -342,7 +347,7 @@ export default function HomeScreen({
           <TouchableOpacity
             style={styles.actionCard}
             activeOpacity={0.85}
-            onPress={() => handleQuickAction('Service History')}
+            onPress={() => handleTabSelect('history')}
           >
             <View style={styles.actionIcon}>
               <Ionicons name="time-outline" size={20} color="#0F172A" />
