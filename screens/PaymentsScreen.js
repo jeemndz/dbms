@@ -8,6 +8,7 @@ import {
   View,
   ActivityIndicator,
   RefreshControl,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { styles } from '../styles';
@@ -56,6 +57,9 @@ function PaymentCard({ item, onPayNow, onViewInvoice, disabledPay = false }) {
     isPending &&
     item.appointment_date &&
     new Date(item.appointment_date) < new Date(new Date().toDateString());
+
+  // Job status for display only
+  const jobStatus = String(item.job_status || '').trim();
 
   return (
     <View style={[paymentStyles.card, (isOverdue || isPaid) && paymentStyles.cardOverdue]}>
@@ -141,7 +145,431 @@ function PaymentCard({ item, onPayNow, onViewInvoice, disabledPay = false }) {
   );
 }
 
+function InvoiceModal({ visible, item, onClose }) {
+  if (!item) return null;
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <View style={invoiceModalStyles.overlay}>
+        <View style={invoiceModalStyles.modal}>
+          <View style={invoiceModalStyles.header}>
+            <Text style={invoiceModalStyles.title}>Invoice Details</Text>
+            <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
+              <Ionicons name="close" size={28} color="#0F1F3A" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            style={invoiceModalStyles.content}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Service Info */}
+            <View style={invoiceModalStyles.section}>
+              <Text style={invoiceModalStyles.sectionTitle}>Service Information</Text>
+              <View style={invoiceModalStyles.infoRow}>
+                <Text style={invoiceModalStyles.label}>Service</Text>
+                <Text style={invoiceModalStyles.value}>{getServiceTitle(item)}</Text>
+              </View>
+              <View style={invoiceModalStyles.infoRow}>
+                <Text style={invoiceModalStyles.label}>Date</Text>
+                <Text style={invoiceModalStyles.value}>{formatDate(item.appointment_date)}</Text>
+              </View>
+              {item.appointment_time ? (
+                <View style={invoiceModalStyles.infoRow}>
+                  <Text style={invoiceModalStyles.label}>Time</Text>
+                  <Text style={invoiceModalStyles.value}>{item.appointment_time}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            {/* Reference */}
+            <View style={invoiceModalStyles.section}>
+              <Text style={invoiceModalStyles.sectionTitle}>Reference</Text>
+              <View style={invoiceModalStyles.infoRow}>
+                <Text style={invoiceModalStyles.label}>Reference #</Text>
+                <Text style={[invoiceModalStyles.value, invoiceModalStyles.refValue]}>
+                  {item.referenceNumber || 'N/A'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Amount Breakdown */}
+            <View style={invoiceModalStyles.section}>
+              <Text style={invoiceModalStyles.sectionTitle}>Amount Breakdown</Text>
+              <View style={[invoiceModalStyles.infoRow, invoiceModalStyles.amountRow]}>
+                <Text style={invoiceModalStyles.label}>Amount Due</Text>
+                <Text style={invoiceModalStyles.amountValue}>
+                  ₱{Number(item.paymentAmount || 0).toFixed(2)}
+                </Text>
+              </View>
+              {Number(item.amountPaid || 0) > 0 ? (
+                <View style={[invoiceModalStyles.infoRow, invoiceModalStyles.amountRow]}>
+                  <Text style={invoiceModalStyles.label}>Amount Paid</Text>
+                  <Text style={invoiceModalStyles.paidValue}>
+                    ₱{Number(item.amountPaid || 0).toFixed(2)}
+                  </Text>
+                </View>
+              ) : null}
+              {Number(item.balance || 0) > 0 ? (
+                <View style={[invoiceModalStyles.infoRow, invoiceModalStyles.balanceRow]}>
+                  <Text style={invoiceModalStyles.label}>Balance</Text>
+                  <Text style={invoiceModalStyles.balanceValue}>
+                    ₱{Number(item.balance || 0).toFixed(2)}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            {/* Status */}
+            <View style={invoiceModalStyles.section}>
+              <Text style={invoiceModalStyles.sectionTitle}>Status</Text>
+              <View style={invoiceModalStyles.infoRow}>
+                <Text style={invoiceModalStyles.label}>Payment Status</Text>
+                <Text
+                  style={[
+                    invoiceModalStyles.statusBadge,
+                    String(item.paymentStatus || '').trim().toLowerCase() === 'paid'
+                      ? invoiceModalStyles.statusPaid
+                      : invoiceModalStyles.statusPending,
+                  ]}
+                >
+                  {String(item.paymentStatus || 'Pending').toUpperCase()}
+                </Text>
+              </View>
+              <View style={invoiceModalStyles.infoRow}>
+                <Text style={invoiceModalStyles.label}>Job Repair Status</Text>
+                <Text
+                  style={[
+                    invoiceModalStyles.statusBadge,
+                    item.job_status === 'Completed'
+                      ? invoiceModalStyles.statusJobCompleted
+                      : item.job_status === 'Cancelled'
+                      ? invoiceModalStyles.statusJobCancelled
+                      : invoiceModalStyles.statusJobInProgress,
+                  ]}
+                >
+                  {String(item.job_status || 'N/A').toUpperCase()}
+                </Text>
+              </View>
+            </View>
+          </ScrollView>
+
+          <TouchableOpacity
+            style={invoiceModalStyles.closeButton}
+            onPress={onClose}
+            activeOpacity={0.85}
+          >
+            <Text style={invoiceModalStyles.closeButtonText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function PaymentMethodModal({ visible, item, onSelectMethod, onClose, isProcessing }) {
+  if (!item) return null;
+
+  const balanceToPay =
+    Number(item.balance || 0) > 0 ? Number(item.balance || 0) : Number(item.paymentAmount || 0);
+
+  const paymentMethods = [
+    {
+      id: 'gcash',
+      name: 'GCash',
+      icon: 'phone-portrait-outline',
+      description: 'Mobile wallet',
+      color: '#0066FF',
+    },
+    {
+      id: 'paymaya',
+      name: 'PayMaya',
+      icon: 'card-outline',
+      description: 'Digital wallet',
+      color: '#FF6B00',
+    },
+    {
+      id: 'card',
+      name: 'Debit/Credit Card',
+      icon: 'card-sharp',
+      description: 'Visa, Mastercard',
+      color: '#1F2937',
+    },
+    {
+      id: 'bank',
+      name: 'Bank Transfer',
+      icon: 'business-outline',
+      description: 'Direct bank transfer',
+      color: '#0EA5E9',
+    },
+  ];
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={paymentMethodModalStyles.overlay}>
+        <View style={paymentMethodModalStyles.modal}>
+          <View style={paymentMethodModalStyles.header}>
+            <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
+              <Ionicons name="close" size={28} color="#0F1F3A" />
+            </TouchableOpacity>
+            <Text style={paymentMethodModalStyles.title}>Payment Method</Text>
+            <View style={{ width: 28 }} />
+          </View>
+
+          <ScrollView
+            style={paymentMethodModalStyles.content}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Amount Section */}
+            <View style={paymentMethodModalStyles.amountSection}>
+              <Text style={paymentMethodModalStyles.amountLabel}>Amount to Pay</Text>
+              <Text style={paymentMethodModalStyles.amountValue}>
+                ₱{balanceToPay.toFixed(2)}
+              </Text>
+              <Text style={paymentMethodModalStyles.serviceTitle}>{getServiceTitle(item)}</Text>
+            </View>
+
+            {/* Payment Methods */}
+            <Text style={paymentMethodModalStyles.methodsTitle}>Select a payment method</Text>
+
+            <View style={paymentMethodModalStyles.methodsGrid}>
+              {paymentMethods.map((method) => (
+                <TouchableOpacity
+                  key={method.id}
+                  style={paymentMethodModalStyles.methodCard}
+                  onPress={() => onSelectMethod(method.name)}
+                  activeOpacity={0.8}
+                  disabled={isProcessing}
+                >
+                  <View
+                    style={[
+                      paymentMethodModalStyles.methodIconContainer,
+                      { backgroundColor: `${method.color}15` },
+                    ]}
+                  >
+                    <Ionicons
+                      name={method.icon}
+                      size={32}
+                      color={method.color}
+                    />
+                  </View>
+                  <Text style={paymentMethodModalStyles.methodName}>{method.name}</Text>
+                  <Text style={paymentMethodModalStyles.methodDescription}>
+                    {method.description}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Info */}
+            <View style={paymentMethodModalStyles.infoBox}>
+              <Ionicons
+                name="shield-checkmark-outline"
+                size={20}
+                color="#10B981"
+              />
+              <Text style={paymentMethodModalStyles.infoText}>
+                Your payment is secured and encrypted for your protection.
+              </Text>
+            </View>
+          </ScrollView>
+
+          <TouchableOpacity
+            style={[
+              paymentMethodModalStyles.cancelButton,
+              isProcessing && paymentMethodModalStyles.buttonDisabled,
+            ]}
+            onPress={onClose}
+            activeOpacity={0.85}
+            disabled={isProcessing}
+          >
+            <Text style={paymentMethodModalStyles.cancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function PaymentDetailsModal({ visible, paymentMethod, amount, onConfirm, onClose, isProcessing }) {
+  const getDetailsForMethod = (method) => {
+    switch (method) {
+      case 'GCash':
+        return {
+          icon: 'phone-portrait-outline',
+          color: '#0066FF',
+          title: 'GCash Payment',
+          steps: [
+            { number: '1', text: 'Open your GCash app' },
+            { number: '2', text: 'Go to "Send Money" section' },
+            { number: '3', text: 'Enter the merchant account details' },
+            { number: '4', text: 'Enter amount: ₱' + amount?.toFixed(2) },
+            { number: '5', text: 'Confirm and complete the transaction' },
+          ],
+          instruction: 'Send payment to our GCash account and keep the reference number.',
+          referencePrefix: 'GCASH',
+        };
+      case 'PayMaya':
+        return {
+          icon: 'card-outline',
+          color: '#FF6B00',
+          title: 'PayMaya Payment',
+          steps: [
+            { number: '1', text: 'Open your PayMaya app or website' },
+            { number: '2', text: 'Select "Pay Bills" or "Send Money"' },
+            { number: '3', text: 'Enter recipient account details' },
+            { number: '4', text: 'Enter amount: ₱' + amount?.toFixed(2) },
+            { number: '5', text: 'Authorize with your password/fingerprint' },
+          ],
+          instruction: 'Complete the payment using your PayMaya account.',
+          referencePrefix: 'MAYA',
+        };
+      case 'Debit/Credit Card':
+        return {
+          icon: 'card-sharp',
+          color: '#1F2937',
+          title: 'Card Payment',
+          steps: [
+            { number: '1', text: 'Provide your card information below' },
+            { number: '2', text: 'Card number, expiry date, and CVV' },
+            { number: '3', text: 'Billing address verification' },
+            { number: '4', text: 'Review payment amount: ₱' + amount?.toFixed(2) },
+            { number: '5', text: 'Complete the transaction securely' },
+          ],
+          instruction: 'Your card payment is processed with industry-standard encryption.',
+          referencePrefix: 'CARD',
+        };
+      case 'Bank Transfer':
+        return {
+          icon: 'business-outline',
+          color: '#0EA5E9',
+          title: 'Bank Transfer',
+          steps: [
+            { number: '1', text: 'Log in to your online banking' },
+            { number: '2', text: 'Select "Fund Transfer" option' },
+            { number: '3', text: 'Enter our bank account details' },
+            { number: '4', text: 'Enter amount: ₱' + amount?.toFixed(2) },
+            { number: '5', text: 'Confirm and submit the transfer' },
+          ],
+          instruction: 'Bank transfer typically takes 1-2 business days to process.',
+          referencePrefix: 'BANK',
+        };
+      default:
+        return null;
+    }
+  };
+
+  const details = getDetailsForMethod(paymentMethod);
+
+  if (!details) return null;
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={paymentDetailsModalStyles.overlay}>
+        <View style={paymentDetailsModalStyles.modal}>
+          <View style={paymentDetailsModalStyles.header}>
+            <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
+              <Ionicons name="close" size={28} color="#0F1F3A" />
+            </TouchableOpacity>
+            <Text style={paymentDetailsModalStyles.title}>{details.title}</Text>
+            <View style={{ width: 28 }} />
+          </View>
+
+          <ScrollView
+            style={paymentDetailsModalStyles.content}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Method Icon Section */}
+            <View style={paymentDetailsModalStyles.iconSection}>
+              <View
+                style={[
+                  paymentDetailsModalStyles.iconContainer,
+                  { backgroundColor: `${details.color}15` },
+                ]}
+              >
+                <Ionicons name={details.icon} size={48} color={details.color} />
+              </View>
+              <Text style={paymentDetailsModalStyles.amountText}>₱{amount?.toFixed(2)}</Text>
+              <Text style={paymentDetailsModalStyles.instructionText}>
+                {details.instruction}
+              </Text>
+            </View>
+
+            {/* Steps */}
+            <View style={paymentDetailsModalStyles.stepsSection}>
+              <Text style={paymentDetailsModalStyles.stepsTitle}>Payment Steps</Text>
+              {details.steps.map((step, index) => (
+                <View key={index} style={paymentDetailsModalStyles.stepItem}>
+                  <View
+                    style={[
+                      paymentDetailsModalStyles.stepNumber,
+                      { backgroundColor: details.color },
+                    ]}
+                  >
+                    <Text style={paymentDetailsModalStyles.stepNumberText}>{step.number}</Text>
+                  </View>
+                  <Text style={paymentDetailsModalStyles.stepText}>{step.text}</Text>
+                </View>
+              ))}
+            </View>
+
+            {/* Info Box */}
+            <View style={paymentDetailsModalStyles.infoBox}>
+              <Ionicons name="information-circle" size={20} color="#0066FF" />
+              <Text style={paymentDetailsModalStyles.infoText}>
+                Keep your reference number safe for record purposes. Support team can use it to
+                verify your payment.
+              </Text>
+            </View>
+          </ScrollView>
+
+          <View style={paymentDetailsModalStyles.buttonContainer}>
+            <TouchableOpacity
+              style={paymentDetailsModalStyles.cancelBtn}
+              onPress={onClose}
+              activeOpacity={0.85}
+              disabled={isProcessing}
+            >
+              <Text style={paymentDetailsModalStyles.cancelBtnText}>Back</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                paymentDetailsModalStyles.confirmBtn,
+                isProcessing && paymentDetailsModalStyles.buttonDisabled,
+              ]}
+              onPress={onConfirm}
+              activeOpacity={0.85}
+              disabled={isProcessing}
+            >
+              <Text style={paymentDetailsModalStyles.confirmBtnText}>
+                {isProcessing ? 'Processing...' : 'Confirm Payment'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function PaymentsScreen({
+
   activeTab = 'payments',
   initialSegment = 'pending',
   onSelectTab,
@@ -155,6 +583,12 @@ export default function PaymentsScreen({
   const [payingId, setPayingId] = useState(null);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [invoiceModalVisible, setInvoiceModalVisible] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
+  const [paymentMethodModalVisible, setPaymentMethodModalVisible] = useState(false);
+  const [selectedPaymentItem, setSelectedPaymentItem] = useState(null);
+  const [paymentDetailsModalVisible, setPaymentDetailsModalVisible] = useState(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null);
 
   const normalizedTenantID =
     Number(tenantID) > 0 ? Number(tenantID) : null;
@@ -192,9 +626,32 @@ export default function PaymentsScreen({
         }),
       ]);
 
+      console.log('Raw pending payments:', pending);
+
       const filteredPending = (Array.isArray(pending) ? pending : []).filter(
-        (item) => isConfirmedAppointment(item)
+        (item) => {
+          // Filter payments that have:
+          // 1. An appointment_id (links to repair_jobs)
+          // 2. Pending payment status
+          const hasAppointmentId = !!item?.appointment_id;
+          const paymentStatus = String(item?.paymentStatus || '').trim().toLowerCase();
+          const isPending = paymentStatus === 'pending';
+          
+          console.log('Checking payment:', {
+            payment_id: item.payment_id,
+            appointment_id: item.appointment_id,
+            job_status: item.job_status,
+            hasAppointmentId,
+            paymentStatus,
+            isPending,
+            shouldDisplay: hasAppointmentId && isPending,
+          });
+          
+          return hasAppointmentId && isPending;
+        }
       );
+
+      console.log('Filtered pending payments count:', filteredPending.length);
 
       const filteredHistory = (Array.isArray(history) ? history : []).filter(
         (item) => isConfirmedAppointment(item)
@@ -232,23 +689,21 @@ export default function PaymentsScreen({
   const isTabActive = (tab) => activeTab === tab;
 
   const handlePayNow = (item) => {
-    const balanceToPay =
-      Number(item.balance || 0) > 0 ? Number(item.balance || 0) : Number(item.paymentAmount || 0);
+    setSelectedPaymentItem(item);
+    setPaymentMethodModalVisible(true);
+  };
 
-    Alert.alert(
-      'Pay Now',
-      `Amount Due: ₱${balanceToPay.toFixed(2)}\n\n${getServiceTitle(item)}`,
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'GCash',
-          onPress: () => handlePaymentMethod(item, 'GCash'),
-        },
-      ]
-    );
+  const handleSelectPaymentMethod = (method) => {
+    setSelectedPaymentMethod(method);
+    setPaymentMethodModalVisible(false);
+    setPaymentDetailsModalVisible(true);
+  };
+
+  const handleConfirmPayment = async () => {
+    if (selectedPaymentItem && selectedPaymentMethod) {
+      await handlePaymentMethod(selectedPaymentItem, selectedPaymentMethod);
+      setPaymentDetailsModalVisible(false);
+    }
   };
 
   const handlePaymentMethod = async (item, method) => {
@@ -263,13 +718,25 @@ export default function PaymentsScreen({
 
       setPayingId(item.payment_id);
 
+      let referenceNumber = `${Date.now()}`;
+
+      if (method === 'GCash') {
+        referenceNumber = `GCASH-${Date.now()}`;
+      } else if (method === 'PayMaya') {
+        referenceNumber = `MAYA-${Date.now()}`;
+      } else if (method === 'Debit/Credit Card') {
+        referenceNumber = `CARD-${Date.now()}`;
+      } else if (method === 'Bank Transfer') {
+        referenceNumber = `BANK-${Date.now()}`;
+      }
+
       await payPayment({
         payment_id: item.payment_id,
         tenantID: normalizedTenantID,
         user_id: normalizedUserId,
         amountPaid: balanceToPay,
-        gcashReferenceNumber: `GCASH-${Date.now()}`,
-        remarks: `Paid via ${method} mobile app`,
+        gcashReferenceNumber: referenceNumber,
+        remarks: `Paid via ${method}`,
       });
 
       Alert.alert(
@@ -286,16 +753,8 @@ export default function PaymentsScreen({
   };
 
   const handleViewInvoice = (item) => {
-    Alert.alert(
-      'Invoice',
-      `Reference: ${item.referenceNumber || 'N/A'}\n` +
-        `Amount: ₱${Number(item.paymentAmount || 0).toFixed(2)}\n` +
-        `Paid: ₱${Number(item.amountPaid || 0).toFixed(2)}\n` +
-        `Balance: ₱${Number(item.balance || 0).toFixed(2)}\n` +
-        `Status: ${item.paymentStatus || 'N/A'}\n` +
-        `Appointment Status: ${item.appointment_status || 'N/A'}\n` +
-        `Date: ${formatDate(item.appointment_date)}`
-    );
+    setSelectedInvoice(item);
+    setInvoiceModalVisible(true);
   };
 
   if (error && !loading) {
@@ -515,6 +974,38 @@ export default function PaymentsScreen({
           </TouchableOpacity>
         </View>
       </View>
+
+      <InvoiceModal
+        visible={invoiceModalVisible}
+        item={selectedInvoice}
+        onClose={() => {
+          setInvoiceModalVisible(false);
+          setSelectedInvoice(null);
+        }}
+      />
+
+      <PaymentMethodModal
+        visible={paymentMethodModalVisible}
+        item={selectedPaymentItem}
+        onSelectMethod={handleSelectPaymentMethod}
+        onClose={() => {
+          setPaymentMethodModalVisible(false);
+          setSelectedPaymentItem(null);
+        }}
+        isProcessing={payingId !== null}
+      />
+
+      <PaymentDetailsModal
+        visible={paymentDetailsModalVisible}
+        paymentMethod={selectedPaymentMethod}
+        amount={selectedPaymentItem?.balance || selectedPaymentItem?.paymentAmount}
+        onConfirm={handleConfirmPayment}
+        onClose={() => {
+          setPaymentDetailsModalVisible(false);
+          setSelectedPaymentMethod(null);
+        }}
+        isProcessing={payingId !== null}
+      />
     </View>
   );
 }
@@ -674,6 +1165,25 @@ const paymentStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  jobStatusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#D97706',
+  },
+  jobStatusText: {
+    flex: 1,
+    marginLeft: 10,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#92400E',
+    lineHeight: 16,
+  },
   payNowButton: {
     flex: 1,
     minHeight: 58,
@@ -772,5 +1282,425 @@ const paymentStyles = StyleSheet.create({
     color: '#334A66',
     fontSize: 12,
     lineHeight: 22,
+  },
+});
+
+const invoiceModalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'flex-end',
+  },
+  modal: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '90%',
+    paddingTop: 20,
+    paddingHorizontal: 20,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0F1F3A',
+  },
+  content: {
+    paddingBottom: 20,
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#334A66',
+    marginBottom: 12,
+    letterSpacing: 0.5,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5FB',
+  },
+  label: {
+    fontSize: 14,
+    color: '#7A8DAA',
+    fontWeight: '500',
+  },
+  value: {
+    fontSize: 14,
+    color: '#0F1F3A',
+    fontWeight: '600',
+  },
+  refValue: {
+    fontFamily: 'Courier New',
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2D3748',
+  },
+  amountRow: {
+    paddingVertical: 12,
+  },
+  amountValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F1F3A',
+  },
+  paidValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#10B981',
+  },
+  balanceValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#B91C1C',
+  },
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: '700',
+    overflow: 'hidden',
+  },
+  statusPaid: {
+    backgroundColor: '#DCFCE7',
+    color: '#166534',
+  },
+  statusPending: {
+    backgroundColor: '#FEF3C7',
+    color: '#B45309',
+  },
+  statusConfirmed: {
+    backgroundColor: '#DBEAFE',
+    color: '#1E40AF',
+  },
+  statusOther: {
+    backgroundColor: '#F3F4F6',
+    color: '#374151',
+  },
+  statusJobCompleted: {
+    backgroundColor: '#DCFCE7',
+    color: '#166534',
+  },
+  statusJobCancelled: {
+    backgroundColor: '#FEE2E2',
+    color: '#991B1B',
+  },
+  statusJobInProgress: {
+    backgroundColor: '#DBEAFE',
+    color: '#1E40AF',
+  },
+  balanceRow: {
+    borderBottomColor: '#FFE2E2',
+  },
+  closeButton: {
+    backgroundColor: '#132B46',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 20,
+  },
+  closeButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+});
+
+const paymentMethodModalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modal: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    maxHeight: '85%',
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0F1F3A',
+  },
+  content: {
+    paddingBottom: 20,
+  },
+  amountSection: {
+    backgroundColor: '#F0F4FA',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 28,
+    alignItems: 'center',
+  },
+  amountLabel: {
+    fontSize: 14,
+    color: '#7A8DAA',
+    fontWeight: '600',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  amountValue: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#132B46',
+    marginBottom: 8,
+  },
+  serviceTitle: {
+    fontSize: 14,
+    color: '#4A5A73',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  methodsTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F1F3A',
+    marginBottom: 16,
+  },
+  methodsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 24,
+  },
+  methodCard: {
+    width: '48%',
+    borderRadius: 16,
+    backgroundColor: '#F8FAFC',
+    padding: 16,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+  },
+  methodIconContainer: {
+    width: 56,
+    height: 56,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  methodName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F1F3A',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  methodDescription: {
+    fontSize: 12,
+    color: '#7A8DAA',
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  infoBox: {
+    flexDirection: 'row',
+    backgroundColor: '#ECFDF5',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'flex-start',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#D1F0DC',
+  },
+  infoText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#047857',
+    fontWeight: '500',
+    marginLeft: 10,
+    lineHeight: 18,
+  },
+  cancelButton: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 16,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+  },
+  cancelButtonText: {
+    color: '#6B7280',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+});
+
+const paymentDetailsModalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modal: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    maxHeight: '90%',
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0F1F3A',
+  },
+  content: {
+    paddingBottom: 20,
+  },
+  iconSection: {
+    alignItems: 'center',
+    marginBottom: 32,
+    paddingVertical: 20,
+  },
+  iconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  amountText: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: '#132B46',
+    marginBottom: 12,
+  },
+  instructionText: {
+    fontSize: 14,
+    color: '#4A5A73',
+    fontWeight: '500',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  stepsSection: {
+    marginBottom: 28,
+  },
+  stepsTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F1F3A',
+    marginBottom: 16,
+  },
+  stepItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 14,
+  },
+  stepNumber: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    minWidth: 36,
+  },
+  stepNumberText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  stepText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#334A66',
+    fontWeight: '500',
+    lineHeight: 20,
+    paddingTop: 8,
+  },
+  infoBox: {
+    flexDirection: 'row',
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'flex-start',
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  infoText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#1E40AF',
+    fontWeight: '500',
+    marginLeft: 10,
+    lineHeight: 18,
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  cancelBtn: {
+    flex: 1,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+  },
+  cancelBtnText: {
+    color: '#6B7280',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  confirmBtn: {
+    flex: 1,
+    backgroundColor: '#132B46',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  confirmBtnText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  buttonDisabled: {
+    opacity: 0.5,
   },
 });

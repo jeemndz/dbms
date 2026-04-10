@@ -5,6 +5,7 @@ import { styles } from '../styles.js';
 import { fetchServices } from '../services/serviceApi';
 import { fetchVehiclesByUser } from '../services/vehicleApi';
 import { createAppointment } from '../services/appointmentApi';
+import { fetchPendingPayments } from '../services/paymentApi';
 
 const weekDays = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
@@ -104,6 +105,45 @@ const convertTo24HourFormat = (time12) => {
   }
 
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+};
+
+const hasOverduePayments = (payments) => {
+  if (!Array.isArray(payments) || payments.length === 0) {
+    console.log('No payments to check');
+    return false;
+  }
+
+  const today = new Date(new Date().toDateString());
+
+  // Check completed jobs with pending payments for overdue payments
+  const overduePayments = payments.filter(
+    (payment) => {
+      const jobStatus = String(payment?.job_status || '').trim().toLowerCase();
+      const paymentStatus = String(payment?.paymentStatus || '').trim().toLowerCase();
+      return jobStatus === 'completed' && paymentStatus === 'pending';
+    }
+  );
+
+  console.log('Overdue payments to check:', overduePayments.length);
+
+  const overdueFound = overduePayments.some((payment) => {
+    const appointmentDate = payment.appointment_date ? new Date(payment.appointment_date) : null;
+    if (!appointmentDate) return false;
+
+    const isOverdue = appointmentDate < today;
+    console.log('Payment check:', {
+      paymentId: payment.payment_id,
+      jobStatus: payment.job_status,
+      paymentStatus: payment.paymentStatus,
+      appointmentDate: payment.appointment_date,
+      isOverdue,
+    });
+
+    return isOverdue;
+  });
+
+  console.log('Overdue payments found:', overdueFound);
+  return overdueFound;
 };
 
 export default function BookServiceScreen({
@@ -344,6 +384,29 @@ export default function BookServiceScreen({
     if (validSelectedServiceIds.length === 0) {
       Alert.alert('Select a Service', 'Please pick at least one valid service.');
       return;
+    }
+
+    // Check for overdue payments
+    try {
+      const pendingPayments = await fetchPendingPayments({
+        tenantID: normalizedTenantID,
+        user_id: normalizedUserId,
+        limit: 50,
+      });
+
+      console.log('Pending payments fetched:', pendingPayments);
+
+      if (hasOverduePayments(pendingPayments)) {
+        Alert.alert(
+          'Overdue Payments',
+          'You have overdue payments. Please settle them before booking a new appointment.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking payments:', error);
+      // Continue anyway if payment check fails
     }
 
     setBookingSubmitting(true);

@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import axios from 'axios';
 import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   Text,
   TextInput,
   TouchableOpacity,
@@ -22,7 +22,9 @@ export default function RegisterScreen({
 }) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('rapidrepair224@gmail.com');
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -51,7 +53,7 @@ export default function RegisterScreen({
   };
 
   const handleRegister = async () => {
-    if (!firstName || !lastName || !email || !phone || !password || !confirmPassword) {
+    if (!firstName || !lastName || !username || !email || !address || !phone || !password || !confirmPassword) {
       Alert.alert('Error', 'Please fill in all fields.');
       return;
     }
@@ -63,31 +65,18 @@ export default function RegisterScreen({
 
     setLoading(true);
     try {
-      const response = await axios.post(
-        'https://rapidrepair-gygpcbczgyg0czek.southeastasia-01.azurewebsites.net/userregister.php',
-        {
+      if (onRegister) {
+        await onRegister({
           firstName: firstName.trim(),
           lastName: lastName.trim(),
+          username: username.trim(),
           email: email.trim(),
+          address: address.trim(),
           phone: phone.trim(),
-          password: password, // plain text as requested
-        }
-      );
-
-      if (response.data.status === 'success') {
-        Alert.alert('Success', response.data.message || 'Account created successfully!');
-        const rawTenantId =
-          response?.data?.tenantID || response?.data?.tenantId || response?.data?.tenant_id || '001';
-        const tenantId = String(rawTenantId).replace(/\D/g, '').slice(-3).padStart(3, '0');
-
-        if (onRegister) {
-          await onRegister({
-            email: email.trim(),
-            tenantId,
-          });
-        }
+          password,
+        });
       } else {
-        Alert.alert('Error', response.data.message || 'Registration failed.');
+        Alert.alert('Error', 'Registration flow is not connected.');
       }
     } catch (error) {
       console.log(error);
@@ -103,12 +92,13 @@ export default function RegisterScreen({
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.keyboardWrapper}
     >
-      <Text style={styles.pageTitle}>Create Account</Text>
-      <Text style={styles.pageSubtitle}>
-        Join Rapid Repair to get your devices fixed quickly and track your repairs.
-      </Text>
+      <ScrollView contentContainerStyle={{ flexGrow: 1 }} showsVerticalScrollIndicator={false}>
+        <Text style={styles.pageTitle}>Create Account</Text>
+        <Text style={styles.pageSubtitle}>
+          Join Rapid Repair to get your devices fixed quickly and track your repairs.
+        </Text>
 
-      <View style={styles.form}>
+        <View style={styles.form}>
         {/* Name Fields */}
         <View style={styles.rowGroup}>
           <View style={[styles.halfField, styles.halfFieldSpacing]}>
@@ -162,6 +152,40 @@ export default function RegisterScreen({
           </View>
         </View>
 
+        {/* Username */}
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Username</Text>
+          <View style={styles.inputWithIcon}>
+            <FontAwesome name="at" size={18} color="#9AA3B1" style={styles.inputIcon} />
+            <TextInput
+              value={username}
+              onChangeText={setUsername}
+              placeholder="username"
+              placeholderTextColor="#9AA3B1"
+              style={styles.inputWithIconField}
+              autoCapitalize="none"
+              textContentType="username"
+            />
+          </View>
+        </View>
+
+        {/* Address */}
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Address</Text>
+          <View style={styles.inputWithIcon}>
+            <FontAwesome name="map-marker" size={18} color="#9AA3B1" style={styles.inputIcon} />
+            <TextInput
+              value={address}
+              onChangeText={setAddress}
+              placeholder="House No, Street, Barangay, City"
+              placeholderTextColor="#9AA3B1"
+              style={styles.inputWithIconField}
+              autoCapitalize="words"
+              textContentType="fullStreetAddress"
+            />
+          </View>
+        </View>
+
         {/* Phone */}
         <View style={styles.fieldGroup}>
           <Text style={styles.fieldLabel}>Phone Number</Text>
@@ -170,7 +194,7 @@ export default function RegisterScreen({
             <TextInput
               value={phone}
               onChangeText={setPhone}
-              placeholder="+1 (555) 000-0000"
+              placeholder="09XXXXXXXXX"
               placeholderTextColor="#9AA3B1"
               style={styles.inputWithIconField}
               keyboardType="phone-pad"
@@ -231,7 +255,7 @@ export default function RegisterScreen({
           disabled={loading}
         >
           <Text style={styles.primaryButtonText}>
-            {loading ? 'Creating Account...' : 'Create Account'}
+            {loading ? 'Creating Account...' : 'Continue'}
           </Text>
         </TouchableOpacity>
 
@@ -267,6 +291,7 @@ export default function RegisterScreen({
           </TouchableOpacity>
         </View>
       </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }

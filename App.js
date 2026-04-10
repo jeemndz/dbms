@@ -1,6 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
-import axios from 'axios';
 import {
   Alert,
   SafeAreaView,
@@ -23,71 +22,16 @@ import {
 } from './services/vehicleApi';
 
 const API_BASE_URL = 'https://rapidrepair-gygpcbczgyg0czek.southeastasia-01.azurewebsites.net';
-const SEND_VERIFICATION_ENDPOINTS = [
-  `${API_BASE_URL}/mobileapis/send_verification_code.php`,
-  `${API_BASE_URL}/send_verification_code.php`,
-];
-const VERIFY_CODE_ENDPOINTS = [
-  `${API_BASE_URL}/mobileapis/verify_verification_code.php`,
-  `${API_BASE_URL}/verify_verification_code.php`,
-];
-
-const normalizeTenantId = (tenantId) => String(tenantId || '001').replace(/\D/g, '').slice(-3).padStart(3, '0');
-
-const isNotFoundError = (error) => Number(error?.response?.status || 0) === 404;
-
-const normalizeServerMessage = (error, fallbackMessage) => {
-  const status = Number(error?.response?.status || 0);
-  const responseData = error?.response?.data;
-
-  if (typeof responseData === 'string') {
-    const withoutHtml = responseData.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    if (withoutHtml && !withoutHtml.toLowerCase().includes('404 not found')) {
-      return withoutHtml;
-    }
-  }
-
-  if (status === 404) {
-    return 'API endpoint not found (404). Please check server deployment path.';
-  }
-
-  return (
-    error?.response?.data?.message ||
-    error?.message ||
-    fallbackMessage
-  );
-};
-
-const postWithFallback = async (endpoints, payload) => {
-  let lastError = null;
-
-  for (const endpoint of endpoints) {
-    try {
-      return await axios.post(endpoint, payload);
-    } catch (error) {
-      lastError = error;
-      if (!isNotFoundError(error)) {
-        throw error;
-      }
-    }
-  }
-
-  throw lastError || new Error('API endpoint not found.');
-};
 
 export default function App() {
   const [screen, setScreen] = useState('login');
   const [showPassword, setShowPassword] = useState(false);
   const [homeTab, setHomeTab] = useState('home');
   const [currentUser, setCurrentUser] = useState(null);
-  const [verificationSession, setVerificationSession] = useState({
-    email: '',
-    tenantId: '001',
-  });
+  const [pendingRegistration, setPendingRegistration] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [isVehiclesLoading, setIsVehiclesLoading] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
-  const [isSendingCode, setIsSendingCode] = useState(false);
 
   const tenantID = Number(
     currentUser?.tenantID ||
@@ -130,88 +74,49 @@ export default function App() {
     handleHomeAction(actionName, `${actionName} is ready to be connected to its screen.`);
   };
 
-  const handleRegisterSuccess = async ({ email, tenantId }) => {
-    const normalizedTenantId = normalizeTenantId(tenantId);
-
-    setVerificationSession({
-      email,
-      tenantId: normalizedTenantId,
-    });
-
-    setIsSendingCode(true);
-    try {
-      const response = await postWithFallback(SEND_VERIFICATION_ENDPOINTS, {
-        email,
-        tenantId: normalizedTenantId,
-      });
-
-      const status = String(response?.data?.status || '').trim().toLowerCase();
-      if (status !== 'success') {
-        Alert.alert('Verification Failed', response?.data?.message || 'Unable to send verification email.');
-        return;
-      }
-
-      Alert.alert('Verification Code Sent', `A verification code was sent to ${email}.`);
-      setScreen('verify');
-    } catch (error) {
-      const serverMessage = normalizeServerMessage(error, 'Unable to send verification email.');
-      if (isNotFoundError(error)) {
-        Alert.alert('Account Created', 'Your account was created, but verification API is not deployed yet. Please contact support/admin to deploy verification endpoints.');
-        setScreen('login');
-        return;
-      }
-      Alert.alert('Verification Failed', String(serverMessage));
-    } finally {
-      setIsSendingCode(false);
-    }
+  const handleRegisterSuccess = async (registrationData) => {
+    setPendingRegistration(registrationData);
+    Alert.alert('Invite Code Required', 'Enter the 6-digit invite code from the shop owner.');
+    setScreen('verify');
   };
 
   const handleVerifyAccount = async (enteredCode) => {
     setIsVerifying(true);
     try {
-      const response = await postWithFallback(VERIFY_CODE_ENDPOINTS, {
-        email: verificationSession.email,
-        tenantId: verificationSession.tenantId,
-        code: enteredCode,
-      });
-
-      const status = String(response?.data?.status || '').trim().toLowerCase();
-      if (status !== 'success') {
-        Alert.alert('Invalid Code', response?.data?.message || 'Verification code is incorrect or expired.');
+      if (!pendingRegistration) {
+        Alert.alert('Registration Missing', 'Please start the registration again.');
+        setScreen('register');
         return;
       }
 
-      Alert.alert('Verified', 'Your account has been verified successfully.');
-      setScreen('home');
+      const response = await fetch(`${API_BASE_URL}/userregister.php`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...pendingRegistration,
+          invite_code: enteredCode,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || String(payload?.status || '').toLowerCase() !== 'success') {
+        throw new Error(payload?.message || 'Registration failed.');
+      }
+
+      Alert.alert('Registered', payload?.message || 'Your account has been created successfully.');
+      setPendingRegistration(null);
+      setScreen('login');
     } catch (error) {
-      const serverMessage = normalizeServerMessage(error, 'Unable to verify code right now.');
-      Alert.alert('Verification Failed', String(serverMessage));
+      Alert.alert('Registration Failed', String(error?.message || 'Unable to create account right now.'));
     } finally {
       setIsVerifying(false);
     }
   };
 
   const handleResendCode = async () => {
-    setIsSendingCode(true);
-    try {
-      const response = await postWithFallback(SEND_VERIFICATION_ENDPOINTS, {
-        email: verificationSession.email,
-        tenantId: verificationSession.tenantId,
-      });
-
-      const status = String(response?.data?.status || '').trim().toLowerCase();
-      if (status !== 'success') {
-        Alert.alert('Resend Failed', response?.data?.message || 'Unable to resend verification email.');
-        return;
-      }
-
-      Alert.alert('Code Resent', `A new verification code was sent to ${verificationSession.email}.`);
-    } catch (error) {
-      const serverMessage = normalizeServerMessage(error, 'Unable to resend verification email.');
-      Alert.alert('Resend Failed', String(serverMessage));
-    } finally {
-      setIsSendingCode(false);
-    }
+    Alert.alert('Invite Code', 'Ask the shop owner for the 6-digit invite code.');
   };
 
   const loadVehicles = async () => {
@@ -351,12 +256,10 @@ export default function App() {
             />
           ) : (
             <VerificationScreen
-              email={verificationSession.email}
-              tenantId={verificationSession.tenantId}
               onBack={() => setScreen('register')}
               onVerify={handleVerifyAccount}
               onResend={handleResendCode}
-              isVerifying={isVerifying || isSendingCode}
+              isVerifying={isVerifying}
             />
           )}
         </ScrollView>
