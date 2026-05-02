@@ -32,9 +32,8 @@ const getCalendarCells = (visibleMonth) => {
   const cells = [];
 
   for (let index = firstDayOfMonth - 1; index >= 0; index -= 1) {
-    const day = daysInPreviousMonth - index;
     cells.push({
-      date: new Date(year, month - 1, day),
+      date: new Date(year, month - 1, daysInPreviousMonth - index),
       isCurrentMonth: false,
     });
   }
@@ -78,6 +77,7 @@ const getVehicleCardName = (vehicle, index) => {
   if (vehicle?.plate_number) {
     return vehicle.plate_number;
   }
+
   return `Vehicle ${index + 1}`;
 };
 
@@ -87,6 +87,7 @@ const parsePositiveNumber = (value) => {
   }
 
   const parsed = Number(value);
+
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return null;
   }
@@ -109,41 +110,29 @@ const convertTo24HourFormat = (time12) => {
 
 const hasOverduePayments = (payments) => {
   if (!Array.isArray(payments) || payments.length === 0) {
-    console.log('No payments to check');
     return false;
   }
 
   const today = new Date(new Date().toDateString());
 
-  // Check completed jobs with pending payments for overdue payments
-  const overduePayments = payments.filter(
-    (payment) => {
-      const jobStatus = String(payment?.job_status || '').trim().toLowerCase();
-      const paymentStatus = String(payment?.paymentStatus || '').trim().toLowerCase();
-      return jobStatus === 'completed' && paymentStatus === 'pending';
+  return payments.some((payment) => {
+    const jobStatus = String(payment?.job_status || '').trim().toLowerCase();
+    const paymentStatus = String(payment?.paymentStatus || '').trim().toLowerCase();
+
+    if (jobStatus !== 'completed' || paymentStatus !== 'pending') {
+      return false;
     }
-  );
 
-  console.log('Overdue payments to check:', overduePayments.length);
+    const appointmentDate = payment.appointment_date
+      ? new Date(payment.appointment_date)
+      : null;
 
-  const overdueFound = overduePayments.some((payment) => {
-    const appointmentDate = payment.appointment_date ? new Date(payment.appointment_date) : null;
-    if (!appointmentDate) return false;
+    if (!appointmentDate) {
+      return false;
+    }
 
-    const isOverdue = appointmentDate < today;
-    console.log('Payment check:', {
-      paymentId: payment.payment_id,
-      jobStatus: payment.job_status,
-      paymentStatus: payment.paymentStatus,
-      appointmentDate: payment.appointment_date,
-      isOverdue,
-    });
-
-    return isOverdue;
+    return appointmentDate < today;
   });
-
-  console.log('Overdue payments found:', overdueFound);
-  return overdueFound;
 };
 
 export default function BookServiceScreen({
@@ -168,7 +157,12 @@ export default function BookServiceScreen({
   const today = useMemo(() => new Date(), []);
   const [currentStep, setCurrentStep] = useState(1);
   const [selectedVehicleId, setSelectedVehicleId] = useState(null);
-  const [selectedServiceIds, setSelectedServiceIds] = useState([]);
+
+  const [bookingMode, setBookingMode] = useState(null);
+  const [selectedMainServiceIds, setSelectedMainServiceIds] = useState([]);
+  const [selectedSubServiceIds, setSelectedSubServiceIds] = useState([]);
+  const [expandedMainServiceIds, setExpandedMainServiceIds] = useState([]);
+
   const [visibleMonth, setVisibleMonth] = useState(
     () => new Date(today.getFullYear(), today.getMonth(), 1)
   );
@@ -189,7 +183,6 @@ export default function BookServiceScreen({
 
     if (!normalizedTenantID) {
       setServices([]);
-      setSelectedServiceIds([]);
       setServicesError('Missing tenant information. Please log in again.');
       setServicesLoading(false);
       return () => {
@@ -204,14 +197,28 @@ export default function BookServiceScreen({
         const mappedServices = Array.isArray(data)
           ? data.map((service) => ({
               id: String(service.id ?? service.service_id),
+              service_id: String(service.service_id ?? service.id),
+              parent_service_id:
+                service.parent_service_id !== null &&
+                service.parent_service_id !== undefined &&
+                service.parent_service_id !== ''
+                  ? String(service.parent_service_id)
+                  : null,
+              service_type: service.service_type || 'Main',
               title: service.service_name ?? service.title ?? 'Unnamed Service',
               description: service.description ?? '',
               price: Number(service.price || 0),
+              duration_minutes: Number(service.duration_minutes || 0),
+              category: service.category ?? '',
+              status: service.status ?? 'Active',
             }))
           : [];
 
         setServices(mappedServices);
-        setSelectedServiceIds([]);
+        setBookingMode(null);
+        setSelectedMainServiceIds([]);
+        setSelectedSubServiceIds([]);
+        setExpandedMainServiceIds([]);
       })
       .catch((err) => {
         if (!isMounted) return;
@@ -307,40 +314,136 @@ export default function BookServiceScreen({
 
   const isTabActive = (tab) => activeTab === tab;
 
-  const toggleService = (serviceId) => {
-    setSelectedServiceIds((previousIds) => {
+  const activeServices = useMemo(
+    () =>
+      services.filter(
+        (service) => String(service.status || '').toLowerCase() === 'active'
+      ),
+    [services]
+  );
+
+  const mainServices = useMemo(
+    () =>
+      activeServices.filter(
+        (service) => String(service.service_type || '').toLowerCase() === 'main'
+      ),
+    [activeServices]
+  );
+
+  const diagnosticService = useMemo(
+    () =>
+      mainServices.find((service) => {
+        const category = String(service.category || '').toLowerCase();
+        const title = String(service.title || '').toLowerCase();
+
+        return category === 'diagnostics' || title.includes('diagnostic');
+      }),
+    [mainServices]
+  );
+
+  const specificMainServices = useMemo(
+    () =>
+      mainServices.filter((service) => {
+        const category = String(service.category || '').toLowerCase();
+        const title = String(service.title || '').toLowerCase();
+
+        return category !== 'diagnostics' && !title.includes('diagnostic');
+      }),
+    [mainServices]
+  );
+
+  const toggleExpandedMainService = (serviceId) => {
+    setExpandedMainServiceIds((previousIds) => {
       if (previousIds.includes(serviceId)) {
         return previousIds.filter((id) => id !== serviceId);
       }
+
       return [...previousIds, serviceId];
     });
   };
 
-  const total = useMemo(
-    () =>
-      services
-        .filter((service) => selectedServiceIds.includes(service.id))
-        .reduce((runningTotal, service) => runningTotal + (service.price || 0), 0),
-    [selectedServiceIds, services]
-  );
+  const toggleMainService = (serviceId) => {
+    setSelectedMainServiceIds((previousIds) => {
+      const isSelected = previousIds.includes(serviceId);
+
+      if (isSelected) {
+        setSelectedSubServiceIds((previousSubIds) =>
+          previousSubIds.filter((subId) => {
+            const subService = activeServices.find((service) => service.id === subId);
+            return String(subService?.parent_service_id) !== String(serviceId);
+          })
+        );
+
+        setExpandedMainServiceIds((previousExpandedIds) =>
+          previousExpandedIds.filter((id) => id !== serviceId)
+        );
+
+        return previousIds.filter((id) => id !== serviceId);
+      }
+
+      setExpandedMainServiceIds((previousExpandedIds) =>
+        previousExpandedIds.includes(serviceId)
+          ? previousExpandedIds
+          : [...previousExpandedIds, serviceId]
+      );
+
+      return [...previousIds, serviceId];
+    });
+  };
+
+  const toggleSubService = (serviceId) => {
+    setSelectedSubServiceIds((previousIds) => {
+      if (previousIds.includes(serviceId)) {
+        return previousIds.filter((id) => id !== serviceId);
+      }
+
+      return [...previousIds, serviceId];
+    });
+  };
+
+  const total = useMemo(() => {
+    if (bookingMode === 'diagnostic' && diagnosticService) {
+      return diagnosticService.price || 0;
+    }
+
+    if (bookingMode === 'specific') {
+      return activeServices
+        .filter((service) => selectedSubServiceIds.includes(service.id))
+        .reduce((runningTotal, service) => runningTotal + (service.price || 0), 0);
+    }
+
+    return 0;
+  }, [bookingMode, diagnosticService, selectedSubServiceIds, activeServices]);
 
   const selectedVehicle = useMemo(
     () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) || null,
     [selectedVehicleId, vehicles]
   );
 
-  const selectedServices = useMemo(
-    () => services.filter((service) => selectedServiceIds.includes(service.id)),
-    [selectedServiceIds, services]
-  );
+  const selectedServices = useMemo(() => {
+    if (bookingMode === 'diagnostic' && diagnosticService) {
+      return [diagnosticService];
+    }
+
+    if (bookingMode === 'specific') {
+      return activeServices.filter((service) =>
+        selectedSubServiceIds.includes(service.id)
+      );
+    }
+
+    return [];
+  }, [bookingMode, diagnosticService, selectedSubServiceIds, activeServices]);
 
   const canProceedStepOne =
     !vehiclesLoading &&
     !servicesLoading &&
     !!selectedVehicleId &&
-    selectedServiceIds.length > 0 &&
+    !!bookingMode &&
     !!normalizedTenantID &&
-    !!normalizedUserId;
+    !!normalizedUserId &&
+    (bookingMode === 'diagnostic'
+      ? !!diagnosticService
+      : selectedMainServiceIds.length > 0 && selectedSubServiceIds.length > 0);
 
   const handleNextStep = () => {
     if (!normalizedTenantID || !normalizedUserId) {
@@ -353,8 +456,26 @@ export default function BookServiceScreen({
       return;
     }
 
-    if (selectedServiceIds.length === 0) {
-      Alert.alert('Select a Service', 'Please pick at least one service before continuing.');
+    if (!bookingMode) {
+      Alert.alert('Select Service Type', 'Please choose Diagnostics or Specific Service.');
+      return;
+    }
+
+    if (bookingMode === 'diagnostic' && !diagnosticService) {
+      Alert.alert(
+        'Diagnostics Not Available',
+        'No active diagnostics service is available right now.'
+      );
+      return;
+    }
+
+    if (bookingMode === 'specific' && selectedMainServiceIds.length === 0) {
+      Alert.alert('Select Main Service', 'Please choose at least one main service.');
+      return;
+    }
+
+    if (bookingMode === 'specific' && selectedSubServiceIds.length === 0) {
+      Alert.alert('Select Sub-Service', 'Please choose at least one sub-service.');
       return;
     }
 
@@ -377,24 +498,28 @@ export default function BookServiceScreen({
       return;
     }
 
-    const validSelectedServiceIds = selectedServiceIds.filter((selectedId) =>
-      services.some((service) => service.id === selectedId)
-    );
+    const validSelectedServiceIds =
+      bookingMode === 'diagnostic'
+        ? diagnosticService
+          ? [Number(diagnosticService.id)]
+          : []
+        : selectedSubServiceIds
+            .filter((selectedId) =>
+              activeServices.some((service) => service.id === selectedId)
+            )
+            .map((id) => Number(id));
 
     if (validSelectedServiceIds.length === 0) {
       Alert.alert('Select a Service', 'Please pick at least one valid service.');
       return;
     }
 
-    // Check for overdue payments
     try {
       const pendingPayments = await fetchPendingPayments({
         tenantID: normalizedTenantID,
         user_id: normalizedUserId,
         limit: 50,
       });
-
-      console.log('Pending payments fetched:', pendingPayments);
 
       if (hasOverduePayments(pendingPayments)) {
         Alert.alert(
@@ -406,7 +531,6 @@ export default function BookServiceScreen({
       }
     } catch (error) {
       console.error('Error checking payments:', error);
-      // Continue anyway if payment check fails
     }
 
     setBookingSubmitting(true);
@@ -426,24 +550,15 @@ export default function BookServiceScreen({
         vehicle_id: Number(selectedVehicleId),
         appointment_date: appointmentDate,
         appointment_time: appointmentTime,
-        service_ids: validSelectedServiceIds.map((id) => Number(id)),
+        service_ids: validSelectedServiceIds,
+        booking_type: bookingMode,
+        selected_main_service_ids:
+          bookingMode === 'specific'
+            ? selectedMainServiceIds.map((id) => Number(id))
+            : [],
         total_amount: Number(total),
         notes: String(notes || ''),
       };
-
-      console.log('BOOKING SCREEN CONTEXT', {
-        tenantID,
-        normalizedTenantID,
-        user_id,
-        userId,
-        resolvedUserId,
-        normalizedUserId,
-        selectedVehicleId,
-        validSelectedServiceIds,
-        total,
-      });
-
-      console.log('BOOKING FINAL PAYLOAD', payload);
 
       const response = await createAppointment(payload);
 
@@ -461,7 +576,6 @@ export default function BookServiceScreen({
       );
     } catch (error) {
       const errorMsg = error?.message || 'Failed to create booking. Please try again.';
-      console.log('BOOKING SCREEN ERROR', error);
       setBookingError(errorMsg);
       Alert.alert('Booking Error', errorMsg);
     } finally {
@@ -469,9 +583,14 @@ export default function BookServiceScreen({
     }
   };
 
-  const selectedCount = selectedServiceIds.length;
+  const selectedCount = selectedServices.length;
   const selectedLabel = `${selectedCount} Service${selectedCount === 1 ? '' : 's'} Selected`;
-  const monthLabel = visibleMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+  const monthLabel = visibleMonth.toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  });
+
   const calendarCells = useMemo(() => getCalendarCells(visibleMonth), [visibleMonth]);
 
   const selectedDateLabel = selectedDate.toLocaleDateString('en-US', {
@@ -511,13 +630,16 @@ export default function BookServiceScreen({
 
   const renderStepOne = () => (
     <>
-      <View style={styles.bookServiceStepRow}>
+      <View style={styles.bookServiceStepRowStepTwo}>
         <Text style={styles.bookServiceStepText}>STEP 1 OF 3</Text>
-        <Text style={styles.bookServiceStepPercent}>33% COMPLETE</Text>
       </View>
 
-      <View style={styles.bookServiceProgressTrack}>
-        <View style={styles.bookServiceProgressFill} />
+      <Text style={styles.bookServiceStepTitleCompact}>Select Service</Text>
+
+      <View style={styles.bookServiceProgressSegmentsRow}>
+        <View style={[styles.bookServiceProgressSegment, styles.bookServiceProgressSegmentActive]} />
+        <View style={styles.bookServiceProgressSegment} />
+        <View style={styles.bookServiceProgressSegment} />
       </View>
 
       <View style={styles.bookServiceSectionHeader}>
@@ -585,46 +707,207 @@ export default function BookServiceScreen({
         </ScrollView>
       )}
 
-      <Text style={styles.bookServiceSectionTitle}>Select Services</Text>
+      <View style={styles.bookServiceCalendarCard}>
+        <View style={styles.bookServiceSectionHeader}>
+          <Text style={styles.bookServiceSectionTitle}>Choose a Service</Text>
+          <Text style={styles.bookServiceAddNew}>STEP 1</Text>
+        </View>
 
-      {servicesLoading ? (
-        <Text style={{ marginVertical: 12, color: '#64748B' }}>Loading services...</Text>
-      ) : servicesError ? (
-        <Text style={{ marginVertical: 12, color: 'red' }}>{servicesError}</Text>
-      ) : services.length === 0 ? (
-        <Text style={{ marginVertical: 12, color: '#64748B' }}>No services available.</Text>
-      ) : (
-        services.map((service) => {
-          const isSelected = selectedServiceIds.includes(service.id);
-
-          return (
+        {servicesLoading ? (
+          <Text style={{ marginVertical: 12, color: '#64748B' }}>Loading services...</Text>
+        ) : servicesError ? (
+          <Text style={{ marginVertical: 12, color: 'red' }}>{servicesError}</Text>
+        ) : activeServices.length === 0 ? (
+          <Text style={{ marginVertical: 12, color: '#64748B' }}>No services available.</Text>
+        ) : (
+          <>
             <TouchableOpacity
-              key={service.id}
-              style={styles.bookServiceServiceCard}
-              onPress={() => toggleService(service.id)}
+              style={[
+                styles.bookServiceServiceCard,
+                bookingMode === 'diagnostic' && styles.bookServiceVehicleCardSelected,
+              ]}
+              onPress={() => {
+                setBookingMode('diagnostic');
+                setSelectedMainServiceIds([]);
+                setSelectedSubServiceIds([]);
+                setExpandedMainServiceIds([]);
+              }}
               activeOpacity={0.9}
             >
               <View
                 style={[
                   styles.bookServiceCheckBox,
-                  isSelected && styles.bookServiceCheckBoxSelected,
+                  bookingMode === 'diagnostic' && styles.bookServiceCheckBoxSelected,
                 ]}
               >
-                {isSelected ? <Ionicons name="checkmark" size={17} color="#FFFFFF" /> : null}
+                {bookingMode === 'diagnostic' ? (
+                  <Ionicons name="checkmark" size={17} color="#FFFFFF" />
+                ) : null}
               </View>
 
               <View style={styles.bookServiceServiceTextWrap}>
-                <Text style={styles.bookServiceServiceTitle}>{service.title}</Text>
-                <Text style={styles.bookServiceServiceDescription}>{service.description}</Text>
+                <Text style={styles.bookServiceServiceTitle}>I don’t know the problem</Text>
+                <Text style={styles.bookServiceServiceDescription}>
+                  Choose Diagnostics. The mechanic will inspect your vehicle first.
+                </Text>
               </View>
 
               <Text style={styles.bookServiceServicePrice}>
-                ₱{Number(service.price || 0).toFixed(2)}
+                ₱{Number(diagnosticService?.price || 0).toFixed(2)}
               </Text>
             </TouchableOpacity>
-          );
-        })
-      )}
+
+            <TouchableOpacity
+              style={[
+                styles.bookServiceServiceCard,
+                bookingMode === 'specific' && styles.bookServiceVehicleCardSelected,
+              ]}
+              onPress={() => {
+                setBookingMode('specific');
+              }}
+              activeOpacity={0.9}
+            >
+              <View
+                style={[
+                  styles.bookServiceCheckBox,
+                  bookingMode === 'specific' && styles.bookServiceCheckBoxSelected,
+                ]}
+              >
+                {bookingMode === 'specific' ? (
+                  <Ionicons name="checkmark" size={17} color="#FFFFFF" />
+                ) : null}
+              </View>
+
+              <View style={styles.bookServiceServiceTextWrap}>
+                <Text style={styles.bookServiceServiceTitle}>I know the problem</Text>
+                <Text style={styles.bookServiceServiceDescription}>
+                  Select one or more main services, then choose the sub-services.
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {bookingMode === 'specific' ? (
+              <>
+                <Text style={styles.bookServiceSectionTitle}>Select Main Services</Text>
+
+                {specificMainServices.length === 0 ? (
+                  <Text style={{ marginVertical: 12, color: '#64748B' }}>
+                    No main services available.
+                  </Text>
+                ) : (
+                  specificMainServices.map((service) => {
+                    const isSelected = selectedMainServiceIds.includes(service.id);
+                    const isExpanded = expandedMainServiceIds.includes(service.id);
+
+                    return (
+                      <View key={service.id}>
+                        <TouchableOpacity
+                          style={[
+                            styles.bookServiceServiceCard,
+                            isSelected && styles.bookServiceVehicleCardSelected,
+                          ]}
+                          onPress={() => toggleMainService(service.id)}
+                          activeOpacity={0.9}
+                        >
+                          <View
+                            style={[
+                              styles.bookServiceCheckBox,
+                              isSelected && styles.bookServiceCheckBoxSelected,
+                            ]}
+                          >
+                            {isSelected ? (
+                              <Ionicons name="checkmark" size={17} color="#FFFFFF" />
+                            ) : null}
+                          </View>
+
+                          <View style={styles.bookServiceServiceTextWrap}>
+                            <Text style={styles.bookServiceServiceTitle}>{service.title}</Text>
+                            <Text style={styles.bookServiceServiceDescription}>
+                              {service.description || 'Select this main service.'}
+                            </Text>
+                          </View>
+
+                          <TouchableOpacity
+                            onPress={() => toggleExpandedMainService(service.id)}
+                            activeOpacity={0.85}
+                            style={{
+                              paddingHorizontal: 6,
+                              paddingVertical: 6,
+                            }}
+                          >
+                            <Ionicons
+                              name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                              size={22}
+                              color="#0F1F3A"
+                            />
+                          </TouchableOpacity>
+                        </TouchableOpacity>
+
+                        {isSelected && isExpanded ? (
+                          <View style={{ marginLeft: 12, marginBottom: 8 }}>
+                            {activeServices
+                              .filter(
+                                (subService) =>
+                                  String(subService.service_type || '').toLowerCase() === 'sub' &&
+                                  String(subService.parent_service_id) === String(service.id)
+                              )
+                              .map((subService) => {
+                                const subSelected = selectedSubServiceIds.includes(subService.id);
+
+                                return (
+                                  <TouchableOpacity
+                                    key={subService.id}
+                                    style={styles.bookServiceServiceCard}
+                                    onPress={() => toggleSubService(subService.id)}
+                                    activeOpacity={0.9}
+                                  >
+                                    <View
+                                      style={[
+                                        styles.bookServiceCheckBox,
+                                        subSelected && styles.bookServiceCheckBoxSelected,
+                                      ]}
+                                    >
+                                      {subSelected ? (
+                                        <Ionicons name="checkmark" size={17} color="#FFFFFF" />
+                                      ) : null}
+                                    </View>
+
+                                    <View style={styles.bookServiceServiceTextWrap}>
+                                      <Text style={styles.bookServiceServiceTitle}>
+                                        {subService.title}
+                                      </Text>
+                                      <Text style={styles.bookServiceServiceDescription}>
+                                        {subService.description || 'Specific service to be performed.'}
+                                      </Text>
+                                    </View>
+
+                                    <Text style={styles.bookServiceServicePrice}>
+                                      ₱{Number(subService.price || 0).toFixed(2)}
+                                    </Text>
+                                  </TouchableOpacity>
+                                );
+                              })}
+
+                            {activeServices.filter(
+                              (subService) =>
+                                String(subService.service_type || '').toLowerCase() === 'sub' &&
+                                String(subService.parent_service_id) === String(service.id)
+                            ).length === 0 ? (
+                              <Text style={{ marginVertical: 8, color: '#64748B' }}>
+                                No sub-services available under this main service.
+                              </Text>
+                            ) : null}
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  })
+                )}
+              </>
+            ) : null}
+          </>
+        )}
+      </View>
 
       <View style={styles.bookServiceTotalCard}>
         <View>
@@ -633,7 +916,6 @@ export default function BookServiceScreen({
         </View>
         <View style={styles.bookServiceTotalMetaWrap}>
           <Text style={styles.bookServiceTotalMeta}>{selectedLabel}</Text>
-          <Text style={styles.bookServiceTotalSubMeta}>Excl. taxes & fees</Text>
         </View>
       </View>
 
@@ -660,7 +942,7 @@ export default function BookServiceScreen({
         <Text style={styles.bookServiceStepText}>STEP 2 OF 3</Text>
       </View>
 
-      <Text style={styles.bookServiceStepTitle}>Schedule Appointment</Text>
+      <Text style={styles.bookServiceStepTitleCompact}>Schedule Appointment</Text>
 
       <View style={styles.bookServiceProgressSegmentsRow}>
         <View style={[styles.bookServiceProgressSegment, styles.bookServiceProgressSegmentActive]} />
@@ -984,18 +1266,18 @@ export default function BookServiceScreen({
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.navItem, isTabActive('appointments') && styles.navItemSelected]}
-              onPress={() => onSelectTab && onSelectTab('appointments')}
+              style={[styles.navItem, isTabActive('bookService') && styles.navItemSelected]}
+              onPress={() => onSelectTab && onSelectTab('bookService')}
             >
               <Ionicons
                 name="calendar-outline"
                 size={22}
-                color={isTabActive('appointments') ? '#0F172A' : '#94A3B8'}
+                color={isTabActive('bookService') ? '#0F172A' : '#94A3B8'}
               />
               <Text
                 style={[
                   styles.navLabel,
-                  isTabActive('appointments') && styles.navLabelActive,
+                  isTabActive('bookService') && styles.navLabelActive,
                 ]}
               >
                 Bookings

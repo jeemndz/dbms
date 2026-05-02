@@ -145,15 +145,15 @@ export default function HistoryScreen({ activeTab = 'history', onSelectTab }) {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.navItem, isTabActive('appointments') && styles.navItemSelected]}
-            onPress={() => onSelectTab && onSelectTab('appointments')}
+            style={[styles.navItem, isTabActive('bookService') && styles.navItemSelected]}
+            onPress={() => onSelectTab && onSelectTab('bookService')}
           >
             <Ionicons
               name="calendar-outline"
               size={22}
-              color={isTabActive('appointments') ? '#0F172A' : '#94A3B8'}
+              color={isTabActive('bookService') ? '#0F172A' : '#94A3B8'}
             />
-            <Text style={[styles.navLabel, isTabActive('appointments') && styles.navLabelActive]}>
+            <Text style={[styles.navLabel, isTabActive('bookService') && styles.navLabelActive]}>
               Bookings
             </Text>
           </TouchableOpacity>

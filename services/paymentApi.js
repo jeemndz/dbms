@@ -53,29 +53,48 @@ const isPaidStatus = (value) =>
 const normalizePaymentRecord = (item) => {
   if (!item || typeof item !== 'object') return null;
 
+  const grandTotal = normalizeMoney(item.grand_total, 0);
+  const paymentAmount = normalizeMoney(item.paymentAmount, 0);
+  const amountPaid = normalizeMoney(item.amountPaid, 0);
+
+  const displayGrandTotal = grandTotal > 0 ? grandTotal : paymentAmount;
+  const syncedBalance = Math.max(0, displayGrandTotal - amountPaid);
+
   return {
     payment_id: normalizeId(item.payment_id, null),
     tenantID: normalizeId(item.tenantID, null),
     user_id: normalizeId(item.user_id, null),
     appointment_id: normalizeId(item.appointment_id, null),
-    paymentAmount: normalizeMoney(item.paymentAmount, 0),
-    amountPaid: normalizeMoney(item.amountPaid, 0),
-    balance: normalizeMoney(item.balance, 0),
+
+    grand_total: displayGrandTotal,
+    paymentAmount,
+    amountPaid,
+    balance: syncedBalance,
+
     paymentMethod: item.paymentMethod ? String(item.paymentMethod).trim() : 'Cash',
     paymentDate: item.paymentDate ? String(item.paymentDate) : null,
     paymentStatus: normalizeStatus(item.paymentStatus, 'Pending'),
+
     referenceNumber: item.referenceNumber ? String(item.referenceNumber).trim() : null,
     gcashReferenceNumber: item.gcashReferenceNumber
       ? String(item.gcashReferenceNumber).trim()
       : null,
-    remarks: item.remarks ? String(item.remarks) : null,
+
+    remarks: item.remarks || null,
+
     created_at: item.created_at ? String(item.created_at) : '',
     updated_at: item.updated_at ? String(item.updated_at) : '',
-    appointment_date: item.appointment_date ? String(item.appointment_date) : '',
-    appointment_time: item.appointment_time ? String(item.appointment_time) : '',
-    appointment_status: item.appointment_status
-      ? String(item.appointment_status).trim()
-      : '',
+
+    appointment_date: item.appointment_date || '',
+    appointment_time: item.appointment_time || '',
+    appointment_status: item.appointment_status || '',
+
+    repair_job_id: normalizeId(item.repair_job_id, null),
+    job_order_no: item.job_order_no || '',
+    job_status: item.job_status || '',
+
+    labor_total: normalizeMoney(item.labor_total, 0),
+    parts_total: normalizeMoney(item.parts_total, 0),
   };
 };
 
@@ -108,16 +127,10 @@ export async function fetchPayments({
     params.paymentStatus = String(paymentStatus).trim();
   }
 
-  console.log('FETCH PAYMENTS URL:', API_ENDPOINT);
-  console.log('FETCH PAYMENTS PARAMS:', params);
-
   const response = await http.get(API_ENDPOINT, {
     params,
     validateStatus: () => true,
   });
-
-  console.log('FETCH PAYMENTS STATUS:', response.status);
-  console.log('FETCH PAYMENTS RESPONSE:', response.data);
 
   if (typeof response.data === 'string') {
     throw new Error('API did not return valid JSON. Check PHP path/deployment.');
@@ -184,29 +197,18 @@ export async function payPayment({
   tenantID,
   user_id,
   amountPaid,
+  paymentMethod = 'GCash',
   gcashReferenceNumber = '',
-  remarks = '',
 } = {}) {
   const normalizedPaymentId = normalizeId(payment_id);
   const normalizedTenantId = normalizeId(tenantID);
   const normalizedUserId = normalizeId(user_id);
   const normalizedAmountPaid = Number(amountPaid) || 0;
 
-  if (!normalizedPaymentId) {
-    throw new Error('Invalid payment_id');
-  }
-
-  if (!normalizedTenantId) {
-    throw new Error('Invalid tenantID');
-  }
-
-  if (!normalizedUserId) {
-    throw new Error('Invalid user_id');
-  }
-
-  if (normalizedAmountPaid <= 0) {
-    throw new Error('Amount paid must be greater than 0');
-  }
+  if (!normalizedPaymentId) throw new Error('Invalid payment_id');
+  if (!normalizedTenantId) throw new Error('Invalid tenantID');
+  if (!normalizedUserId) throw new Error('Invalid user_id');
+  if (normalizedAmountPaid <= 0) throw new Error('Amount paid must be greater than 0');
 
   const payload = {
     action: 'pay',
@@ -214,22 +216,15 @@ export async function payPayment({
     tenantID: normalizedTenantId,
     user_id: normalizedUserId,
     amountPaid: normalizedAmountPaid,
-    paymentMethod: 'GCash',
+    paymentMethod,
     gcashReferenceNumber: gcashReferenceNumber
       ? String(gcashReferenceNumber).trim()
       : '',
-    remarks: remarks ? String(remarks).trim() : '',
   };
-
-  console.log('PAY PAYMENT URL:', API_ENDPOINT);
-  console.log('PAY PAYMENT PAYLOAD:', payload);
 
   const response = await http.post(API_ENDPOINT, payload, {
     validateStatus: () => true,
   });
-
-  console.log('PAY PAYMENT STATUS:', response.status);
-  console.log('PAY PAYMENT RESPONSE:', response.data);
 
   if (typeof response.data === 'string') {
     throw new Error('API did not return valid JSON');

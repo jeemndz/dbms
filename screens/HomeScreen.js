@@ -1,3 +1,4 @@
+import { useCallback, useState, useEffect } from 'react';
 import {
   Alert,
   ImageBackground,
@@ -6,16 +7,22 @@ import {
   Text,
   TouchableOpacity,
   View,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { styles } from '../styles';
 import ProfileScreen from './ProfileScreen';
 import BookServiceScreen from './BookServiceScreen';
+import ReviewEstimateScreen from './ReviewEstimateScreen';
 import PaymentsScreen from './PaymentsScreen';
 import HistoryScreen from './HistoryScreen';
+import AppointmentHistoryScreen from './AppointmentHistoryScreen';
 import PersonalInformationScreen from './PersonalInformationScreen';
 import AddVehicleScreen from './AddVehicleScreen';
 import VehicleListScreen from './VehicleListScreen';
+
+const API_URL =
+  'https://rapidrepair-gygpcbczgyg0czek.southeastasia-01.azurewebsites.net';
 
 export default function HomeScreen({
   activeTab = 'home',
@@ -33,6 +40,99 @@ export default function HomeScreen({
   onCallShop,
   onSelectTab,
 }) {
+  const [reviewDiagnosticId, setReviewDiagnosticId] = useState(null);
+  const [reviewEstimateLoading, setReviewEstimateLoading] = useState(false);
+  const [shopLoading, setShopLoading] = useState(false);
+
+  const [shopInfo, setShopInfo] = useState({
+    name: currentUser?.shopName || currentUser?.shop_name || 'Your Shop',
+    subtitle: currentUser?.shopAddress || currentUser?.shop_address || 'Your preferred service center',
+    meta: currentUser?.contactNumber ? `Contact: ${currentUser.contactNumber}` : '',
+    phone: currentUser?.contactNumber || '',
+  });
+
+  const displayName =
+    currentUser?.fullName ||
+    currentUser?.name ||
+    currentUser?.username ||
+    'User';
+
+  const resolvedTenantID = Number(
+    currentUser?.tenantID ??
+    currentUser?.tenantId ??
+    currentUser?.tenant_id ??
+    currentUser?.tenantid ??
+    currentUser?.TenantID ??
+    currentUser?.tenant ??
+    0
+  );
+
+  const resolvedUserId = Number(
+    currentUser?.user_id ??
+    currentUser?.userId ??
+    currentUser?.userid ??
+    currentUser?.userID ??
+    currentUser?.UserID ??
+    currentUser?.id ??
+    0
+  );
+
+  useEffect(() => {
+    const loadShopInfo = async () => {
+      if (!resolvedTenantID) {
+        return;
+      }
+
+      try {
+        setShopLoading(true);
+
+        const response = await fetch(
+          `${API_URL}/get_shop_info.php?tenantID=${encodeURIComponent(resolvedTenantID)}`
+        );
+
+        const data = await response.json().catch(() => ({}));
+
+        if (data?.success) {
+          setShopInfo({
+            name:
+              data.shopName ||
+              currentUser?.shopName ||
+              currentUser?.shop_name ||
+              'Your Shop',
+            subtitle:
+              data.shopAddress ||
+              currentUser?.shopAddress ||
+              currentUser?.shop_address ||
+              'Your preferred service center',
+            meta: data.contactNumber ? `Contact: ${data.contactNumber}` : '',
+            phone: data.contactNumber || '',
+          });
+        } else {
+          setShopInfo((prev) => ({
+            ...prev,
+            name:
+              currentUser?.shopName ||
+              currentUser?.shop_name ||
+              prev.name ||
+              'Your Shop',
+          }));
+        }
+      } catch (error) {
+        console.log('Unable to load shop info:', error);
+      } finally {
+        setShopLoading(false);
+      }
+    };
+
+    loadShopInfo();
+  }, [
+    resolvedTenantID,
+    currentUser?.shopName,
+    currentUser?.shop_name,
+    currentUser?.shopAddress,
+    currentUser?.shop_address,
+  ]);
+
   const handleQuickAction = (actionName) => {
     if (onQuickAction) {
       onQuickAction(actionName);
@@ -48,8 +148,16 @@ export default function HomeScreen({
       return;
     }
 
-    const phoneUrl = 'tel:+15550000000';
+    const phoneNumber = shopInfo?.phone || currentUser?.contactNumber || '';
+
+    if (!phoneNumber) {
+      Alert.alert('Call Shop', 'No shop contact number available.');
+      return;
+    }
+
+    const phoneUrl = `tel:${phoneNumber}`;
     const canOpen = await Linking.canOpenURL(phoneUrl);
+
     if (canOpen) {
       await Linking.openURL(phoneUrl);
       return;
@@ -74,31 +182,53 @@ export default function HomeScreen({
 
   const isTabActive = (tab) => activeTab === tab;
 
-  const displayName =
-    currentUser?.fullName ||
-    currentUser?.name ||
-    currentUser?.username ||
-    'User';
+  const openReviewEstimate = useCallback(async () => {
+    if (!resolvedTenantID || !resolvedUserId) {
+      Alert.alert(
+        'Missing Account Info',
+        'Unable to load estimate because tenant or user information is missing.'
+      );
+      return;
+    }
 
-  const resolvedTenantID = Number(
-    currentUser?.tenantID ??
-      currentUser?.tenantId ??
-      currentUser?.tenant_id ??
-      currentUser?.tenantid ??
-      currentUser?.TenantID ??
-      currentUser?.tenant ??
-      0
-  );
+    try {
+      setReviewEstimateLoading(true);
 
-  const resolvedUserId = Number(
-    currentUser?.user_id ??
-      currentUser?.userId ??
-      currentUser?.userid ??
-      currentUser?.userID ??
-      currentUser?.UserID ??
-      currentUser?.id ??
-      0
-  );
+      const url =
+        `${API_URL}/get_latest_diagnostic_estimate.php` +
+        `?tenantID=${encodeURIComponent(resolvedTenantID)}` +
+        `&user_id=${encodeURIComponent(resolvedUserId)}`;
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (!data.success) {
+        Alert.alert(
+          'No Estimate Found',
+          data.message || 'Unable to find your diagnostic estimate.'
+        );
+        return;
+      }
+
+      if (!data.has_estimate || !data.diagnostic_id) {
+        Alert.alert(
+          'No Estimate Yet',
+          'There is no diagnostic recommendation ready for review yet.'
+        );
+        return;
+      }
+
+      setReviewDiagnosticId(data.diagnostic_id);
+      handleTabSelect('reviewEstimate');
+    } catch (error) {
+      Alert.alert(
+        'Error',
+        'Unable to load your diagnostic estimate. Please try again.'
+      );
+    } finally {
+      setReviewEstimateLoading(false);
+    }
+  }, [resolvedTenantID, resolvedUserId]);
 
   console.log('HomeScreen currentUser:', currentUser);
   console.log('HomeScreen resolvedTenantID:', resolvedTenantID);
@@ -139,6 +269,18 @@ export default function HomeScreen({
     );
   }
 
+  if (activeTab === 'bookService') {
+    return (
+      <BookServiceScreen
+        activeTab={activeTab}
+        tenantID={resolvedTenantID}
+        user_id={resolvedUserId}
+        onSelectTab={handleTabSelect}
+        onLogout={onLogout}
+      />
+    );
+  }
+
   if (activeTab === 'appointments') {
     return (
       <BookServiceScreen
@@ -151,20 +293,39 @@ export default function HomeScreen({
     );
   }
 
-  if (activeTab === 'payments') {
+  if (activeTab === 'history') {
     return (
-      <PaymentsScreen
+      <AppointmentHistoryScreen
         activeTab={activeTab}
-        tenantID={resolvedTenantID}
-        user_id={resolvedUserId}
+        currentUser={currentUser}
         onSelectTab={handleTabSelect}
       />
     );
   }
 
-  if (activeTab === 'history') {
+  if (activeTab === 'reviewEstimate') {
     return (
-      <HistoryScreen
+      <ReviewEstimateScreen
+        activeTab="appointments"
+        route={{
+          params: {
+            diagnostic_id: reviewDiagnosticId,
+            tenantID: resolvedTenantID,
+            user_id: resolvedUserId,
+          },
+        }}
+        navigation={{
+          goBack: () => handleTabSelect('home'),
+        }}
+        onSelectTab={handleTabSelect}
+        onLogout={onLogout}
+      />
+    );
+  }
+
+  if (activeTab === 'payments') {
+    return (
+      <PaymentsScreen
         activeTab={activeTab}
         tenantID={resolvedTenantID}
         user_id={resolvedUserId}
@@ -198,7 +359,14 @@ export default function HomeScreen({
             <View style={styles.homeBrandIcon}>
               <Ionicons name="ios-build" size={18} color="#0F172A" />
             </View>
-            <Text style={styles.homeBrandText}>Rapid Repair</Text>
+            <Text
+              style={[styles.homeBrandText, { maxWidth: '70%' }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
+            >
+              {shopLoading ? 'Loading shop...' : shopInfo.name}
+            </Text>
           </View>
 
           <TouchableOpacity
@@ -326,7 +494,7 @@ export default function HomeScreen({
             <View style={styles.actionIcon}>
               <Ionicons name="calendar-outline" size={20} color="#0F172A" />
             </View>
-            <Text style={styles.actionTitle}>Book Service</Text>
+            <Text style={styles.actionTitle}>Booking Service</Text>
             <Text style={styles.actionSubtitle}>Schedule maintenance</Text>
           </TouchableOpacity>
 
@@ -338,7 +506,7 @@ export default function HomeScreen({
             <View style={styles.actionIcon}>
               <Ionicons name="car-outline" size={20} color="#0F172A" />
             </View>
-            <Text style={styles.actionTitle}>Vehicle List</Text>
+            <Text style={styles.actionTitle}>Your Vehicles</Text>
             <Text style={styles.actionSubtitle}>Manage your cars</Text>
           </TouchableOpacity>
         </View>
@@ -352,8 +520,8 @@ export default function HomeScreen({
             <View style={styles.actionIcon}>
               <Ionicons name="time-outline" size={20} color="#0F172A" />
             </View>
-            <Text style={styles.actionTitle}>Service History</Text>
-            <Text style={styles.actionSubtitle}>Records & Receipts</Text>
+            <Text style={styles.actionTitle}>Appointment History</Text>
+            <Text style={styles.actionSubtitle}>Appointments & Services Details</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -369,13 +537,58 @@ export default function HomeScreen({
           </TouchableOpacity>
         </View>
 
+        <View style={styles.quickActionsRow}>
+          <TouchableOpacity
+            style={[
+              styles.actionCard,
+              reviewEstimateLoading && { opacity: 0.6 },
+            ]}
+            activeOpacity={0.85}
+            onPress={openReviewEstimate}
+            disabled={reviewEstimateLoading}
+          >
+            <View style={styles.actionIcon}>
+              {reviewEstimateLoading ? (
+                <ActivityIndicator size="small" color="#0F172A" />
+              ) : (
+                <Ionicons name="receipt-outline" size={20} color="#0F172A" />
+              )}
+            </View>
+            <Text style={styles.actionTitle}>Review Estimation</Text>
+            <Text style={styles.actionSubtitle}>
+              {reviewEstimateLoading
+                ? 'Loading estimate...'
+                : 'Approve recommended services'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.shopCard}>
           <View>
-            <Text style={styles.shopName}>Elite Auto Downtown</Text>
-            <Text style={styles.shopSubtitle}>
-              Your preferred service center
+            <Text
+              style={styles.shopName}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}>{shopLoading ? 'Loading shop...' : shopInfo.name}
             </Text>
-            <Text style={styles.shopMeta}>2.4 miles away • Open until 7 PM</Text>
+
+            <Text
+              style={styles.shopSubtitle}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {shopInfo.subtitle}
+            </Text>
+
+            {!!shopInfo.meta && (
+              <Text
+                style={styles.shopMeta}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {shopInfo.meta}
+              </Text>
+            )}
           </View>
 
           <TouchableOpacity
@@ -391,7 +604,10 @@ export default function HomeScreen({
       <View style={styles.homeBottomNavWrapper}>
         <View style={styles.bottomNav}>
           <TouchableOpacity
-            style={[styles.navItem, isTabActive('home') && styles.navItemSelected]}
+            style={[
+              styles.navItem,
+              isTabActive('home') && styles.navItemSelected,
+            ]}
             onPress={() => handleTabSelect('home')}
           >
             <Ionicons
@@ -400,7 +616,10 @@ export default function HomeScreen({
               color={isTabActive('home') ? '#0F172A' : '#94A3B8'}
             />
             <Text
-              style={[styles.navLabel, isTabActive('home') && styles.navLabelActive]}
+              style={[
+                styles.navLabel,
+                isTabActive('home') && styles.navLabelActive,
+              ]}
             >
               Home
             </Text>
@@ -409,19 +628,19 @@ export default function HomeScreen({
           <TouchableOpacity
             style={[
               styles.navItem,
-              isTabActive('appointments') && styles.navItemSelected,
+              isTabActive('bookService') && styles.navItemSelected,
             ]}
-            onPress={() => handleTabSelect('appointments')}
+            onPress={() => handleTabSelect('bookService')}
           >
             <Ionicons
               name="calendar-outline"
               size={22}
-              color={isTabActive('appointments') ? '#0F172A' : '#94A3B8'}
+              color={isTabActive('bookService') ? '#0F172A' : '#94A3B8'}
             />
             <Text
               style={[
                 styles.navLabel,
-                isTabActive('appointments') && styles.navLabelActive,
+                isTabActive('bookService') && styles.navLabelActive,
               ]}
             >
               Bookings
@@ -429,7 +648,10 @@ export default function HomeScreen({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.navItem, isTabActive('history') && styles.navItemSelected]}
+            style={[
+              styles.navItem,
+              isTabActive('history') && styles.navItemSelected,
+            ]}
             onPress={() => handleTabSelect('history')}
           >
             <Ionicons
@@ -438,14 +660,20 @@ export default function HomeScreen({
               color={isTabActive('history') ? '#0F172A' : '#94A3B8'}
             />
             <Text
-              style={[styles.navLabel, isTabActive('history') && styles.navLabelActive]}
+              style={[
+                styles.navLabel,
+                isTabActive('history') && styles.navLabelActive,
+              ]}
             >
               History
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.navItem, isTabActive('payments') && styles.navItemSelected]}
+            style={[
+              styles.navItem,
+              isTabActive('payments') && styles.navItemSelected,
+            ]}
             onPress={() => handleTabSelect('payments')}
           >
             <Ionicons
@@ -454,14 +682,20 @@ export default function HomeScreen({
               color={isTabActive('payments') ? '#0F172A' : '#94A3B8'}
             />
             <Text
-              style={[styles.navLabel, isTabActive('payments') && styles.navLabelActive]}
+              style={[
+                styles.navLabel,
+                isTabActive('payments') && styles.navLabelActive,
+              ]}
             >
               Payments
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.navItem, isTabActive('profile') && styles.navItemSelected]}
+            style={[
+              styles.navItem,
+              isTabActive('profile') && styles.navItemSelected,
+            ]}
             onPress={() => handleTabSelect('profile')}
             onLongPress={onLogout}
           >
@@ -471,7 +705,10 @@ export default function HomeScreen({
               color={isTabActive('profile') ? '#0F172A' : '#94A3B8'}
             />
             <Text
-              style={[styles.navLabel, isTabActive('profile') && styles.navLabelActive]}
+              style={[
+                styles.navLabel,
+                isTabActive('profile') && styles.navLabelActive,
+              ]}
             >
               Profile
             </Text>

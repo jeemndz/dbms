@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Alert,
   ScrollView,
@@ -31,49 +31,110 @@ const formatDate = (dateString) => {
   }).toUpperCase();
 };
 
+const money = (value) => `₱${Number(value || 0).toFixed(2)}`;
+
+const parseServiceList = (payment) => {
+  if (payment?.remarks) {
+    try {
+      const parsed = JSON.parse(payment.remarks);
+
+      if (Array.isArray(parsed)) {
+        return parsed.map((service, index) => ({
+          service_id: service.service_id || `json-${index}`,
+          service_name:
+            service.service_name ||
+            service.title ||
+            service.name ||
+            `Service #${service.service_id || index + 1}`,
+          service_price: Number(service.service_price || service.price || service.amount || 0),
+          duration_minutes:
+            Number(service.duration_minutes || service.estimated_duration_minutes || 0) || null,
+        }));
+      }
+    } catch (error) {}
+  }
+
+  if (Array.isArray(payment?.services)) return payment.services;
+  if (Array.isArray(payment?.service_list)) return payment.service_list;
+  if (Array.isArray(payment?.availed_services)) return payment.availed_services;
+
+  return [];
+};
+
+const getGrandTotal = (payment) => {
+  const grandTotal = Number(payment?.grand_total || 0);
+
+  if (Number.isFinite(grandTotal) && grandTotal > 0) {
+    return grandTotal;
+  }
+
+  return Number(payment?.paymentAmount || 0);
+};
+
 const getServiceTitle = (payment) => {
-  return payment.remarks || `Service Ref ${payment.referenceNumber || payment.appointment_id || ''}`.trim();
+  const services = parseServiceList(payment);
+
+  if (services.length > 0) {
+    if (services.length === 1) {
+      return services[0].service_name || services[0].title || 'Vehicle Service';
+    }
+
+    return `${services.length} Services Availed`;
+  }
+
+  return `Invoice ${payment?.referenceNumber || payment?.appointment_id || ''}`.trim();
 };
 
 const getVehicleInfo = (payment) => {
-  if (payment.appointment_date && payment.appointment_time) {
+  const vehicleText = [payment?.year_model, payment?.brand, payment?.model]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+
+  if (vehicleText) return vehicleText;
+
+  if (payment?.appointment_date && payment?.appointment_time) {
     return `${formatDate(payment.appointment_date)} • ${payment.appointment_time}`;
   }
 
-  if (payment.appointment_date) {
-    return formatDate(payment.appointment_date);
-  }
+  if (payment?.appointment_date) return formatDate(payment.appointment_date);
 
   return 'Vehicle Service';
 };
 
-const isConfirmedAppointment = (item) =>
-  String(item?.appointment_status || '').trim().toLowerCase() === 'confirmed';
-
 function PaymentCard({ item, onPayNow, onViewInvoice, disabledPay = false }) {
-  const isPending = String(item.paymentStatus || '').trim().toLowerCase() === 'pending';
-  const isPaid = String(item.paymentStatus || '').trim().toLowerCase() === 'paid';
+  const paymentStatus = String(item.paymentStatus || 'Pending').trim();
+  const isPending = paymentStatus.toLowerCase() === 'pending';
+  const isPaid = paymentStatus.toLowerCase() === 'paid';
+  const isPartial = paymentStatus.toLowerCase() === 'partial';
+
+  const grandTotal = getGrandTotal(item);
+  const amountPaid = Number(item.amountPaid || 0);
+  const balance = Math.max(0, grandTotal - amountPaid);
+
   const isOverdue =
     isPending &&
     item.appointment_date &&
     new Date(item.appointment_date) < new Date(new Date().toDateString());
 
-  // Job status for display only
-  const jobStatus = String(item.job_status || '').trim();
+  const services = parseServiceList(item);
 
   return (
-    <View style={[paymentStyles.card, (isOverdue || isPaid) && paymentStyles.cardOverdue]}>
+    <View style={[paymentStyles.card, isOverdue && paymentStyles.cardOverdue]}>
       <View style={paymentStyles.cardTopRow}>
-        <Text style={paymentStyles.cardDate}>{formatDate(item.appointment_date)}</Text>
+        <Text style={paymentStyles.cardDate}>
+          {formatDate(item.paymentDate || item.appointment_date)}
+        </Text>
+
         <Text
           style={[
             paymentStyles.cardStatus,
-            isOverdue && !isPaid && paymentStyles.cardStatusOverdue,
+            isOverdue && paymentStyles.cardStatusOverdue,
+            isPaid && paymentStyles.cardStatusPaid,
+            isPartial && paymentStyles.cardStatusPartial,
           ]}
         >
-          {isOverdue && !isPaid
-            ? 'OVERDUE'
-            : String(item.paymentStatus || 'Pending').toUpperCase()}
+          {isOverdue && !isPaid ? 'OVERDUE' : paymentStatus.toUpperCase()}
         </Text>
       </View>
 
@@ -84,29 +145,50 @@ function PaymentCard({ item, onPayNow, onViewInvoice, disabledPay = false }) {
         <Text style={paymentStyles.vehicleText}>{getVehicleInfo(item)}</Text>
       </View>
 
+      {services.length > 0 ? (
+        <View style={paymentStyles.servicesPreview}>
+          {services.slice(0, 3).map((service, index) => (
+            <View
+              key={String(service.report_service_id || service.service_id || index)}
+              style={paymentStyles.servicePill}
+            >
+              <Text style={paymentStyles.servicePillText}>
+                {service.service_name || service.title || 'Service'}
+              </Text>
+            </View>
+          ))}
+
+          {services.length > 3 ? (
+            <View style={paymentStyles.servicePill}>
+              <Text style={paymentStyles.servicePillText}>
+                +{services.length - 3} more
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
       <View style={paymentStyles.amountRow}>
         <View>
-          <Text style={paymentStyles.labelText}>Amount Due</Text>
-          <Text style={paymentStyles.amountText}>₱{Number(item.paymentAmount || 0).toFixed(2)}</Text>
+          <Text style={paymentStyles.labelText}>Grand Total</Text>
+          <Text style={paymentStyles.amountText}>{money(grandTotal)}</Text>
         </View>
 
-        {Number(item.amountPaid || 0) > 0 ? (
-          <View>
-            <Text style={paymentStyles.labelText}>Paid</Text>
-            <Text style={paymentStyles.paidText}>₱{Number(item.amountPaid || 0).toFixed(2)}</Text>
-          </View>
-        ) : null}
+        <View>
+          <Text style={paymentStyles.labelText}>Paid</Text>
+          <Text style={paymentStyles.paidText}>{money(amountPaid)}</Text>
+        </View>
 
-        {Number(item.balance || 0) > 0 ? (
-          <View>
-            <Text style={paymentStyles.labelText}>Balance</Text>
-            <Text style={paymentStyles.balanceText}>₱{Number(item.balance || 0).toFixed(2)}</Text>
-          </View>
-        ) : null}
+        <View>
+          <Text style={paymentStyles.labelText}>Balance</Text>
+          <Text style={balance > 0 ? paymentStyles.balanceText : paymentStyles.zeroBalanceText}>
+            {money(balance)}
+          </Text>
+        </View>
       </View>
 
       <View style={paymentStyles.cardBottomRow}>
-        {!isPaid ? (
+        {!isPaid && balance > 0 ? (
           <>
             <TouchableOpacity
               style={[
@@ -118,7 +200,7 @@ function PaymentCard({ item, onPayNow, onViewInvoice, disabledPay = false }) {
               disabled={disabledPay}
             >
               <Text style={paymentStyles.payNowText}>
-                {disabledPay ? 'Processing...' : 'Pay Now'}
+                {disabledPay ? 'Processing...' : 'Pay Balance'}
               </Text>
             </TouchableOpacity>
 
@@ -148,13 +230,13 @@ function PaymentCard({ item, onPayNow, onViewInvoice, disabledPay = false }) {
 function InvoiceModal({ visible, item, onClose }) {
   if (!item) return null;
 
+  const services = parseServiceList(item);
+  const grandTotal = getGrandTotal(item);
+  const amountPaid = Number(item.amountPaid || 0);
+  const balance = Math.max(0, grandTotal - amountPaid);
+
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-    >
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={invoiceModalStyles.overlay}>
         <View style={invoiceModalStyles.modal}>
           <View style={invoiceModalStyles.header}>
@@ -164,70 +246,103 @@ function InvoiceModal({ visible, item, onClose }) {
             </TouchableOpacity>
           </View>
 
-          <ScrollView
-            style={invoiceModalStyles.content}
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Service Info */}
+          <ScrollView style={invoiceModalStyles.content} showsVerticalScrollIndicator={false}>
             <View style={invoiceModalStyles.section}>
               <Text style={invoiceModalStyles.sectionTitle}>Service Information</Text>
+
               <View style={invoiceModalStyles.infoRow}>
                 <Text style={invoiceModalStyles.label}>Service</Text>
                 <Text style={invoiceModalStyles.value}>{getServiceTitle(item)}</Text>
               </View>
+
               <View style={invoiceModalStyles.infoRow}>
                 <Text style={invoiceModalStyles.label}>Date</Text>
-                <Text style={invoiceModalStyles.value}>{formatDate(item.appointment_date)}</Text>
+                <Text style={invoiceModalStyles.value}>
+                  {formatDate(item.paymentDate || item.appointment_date)}
+                </Text>
               </View>
+
               {item.appointment_time ? (
                 <View style={invoiceModalStyles.infoRow}>
                   <Text style={invoiceModalStyles.label}>Time</Text>
                   <Text style={invoiceModalStyles.value}>{item.appointment_time}</Text>
                 </View>
               ) : null}
+
+              {item.job_status ? (
+                <View style={invoiceModalStyles.infoRow}>
+                  <Text style={invoiceModalStyles.label}>Repair Status</Text>
+                  <Text style={invoiceModalStyles.value}>{item.job_status}</Text>
+                </View>
+              ) : null}
             </View>
 
-            {/* Reference */}
+            <View style={invoiceModalStyles.section}>
+              <Text style={invoiceModalStyles.sectionTitle}>Services Availed</Text>
+
+              {services.length === 0 ? (
+                <View style={invoiceModalStyles.infoRow}>
+                  <Text style={invoiceModalStyles.label}>Grand Total</Text>
+                  <Text style={invoiceModalStyles.amountValue}>{money(grandTotal)}</Text>
+                </View>
+              ) : (
+                services.map((service, index) => (
+                  <View
+                    key={String(service.report_service_id || service.service_id || index)}
+                    style={invoiceModalStyles.serviceRow}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={invoiceModalStyles.serviceName}>
+                        {service.service_name || service.title || 'Service'}
+                      </Text>
+                      {service.duration_minutes ? (
+                        <Text style={invoiceModalStyles.serviceMeta}>
+                          {service.duration_minutes} mins
+                        </Text>
+                      ) : null}
+                    </View>
+
+                    <Text style={invoiceModalStyles.servicePrice}>
+                      {money(service.service_price || service.price || service.amount || 0)}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </View>
+
             <View style={invoiceModalStyles.section}>
               <Text style={invoiceModalStyles.sectionTitle}>Reference</Text>
+
               <View style={invoiceModalStyles.infoRow}>
                 <Text style={invoiceModalStyles.label}>Reference #</Text>
                 <Text style={[invoiceModalStyles.value, invoiceModalStyles.refValue]}>
-                  {item.referenceNumber || 'N/A'}
+                  {item.gcashReferenceNumber || item.referenceNumber || 'N/A'}
                 </Text>
               </View>
             </View>
 
-            {/* Amount Breakdown */}
             <View style={invoiceModalStyles.section}>
               <Text style={invoiceModalStyles.sectionTitle}>Amount Breakdown</Text>
+
               <View style={[invoiceModalStyles.infoRow, invoiceModalStyles.amountRow]}>
-                <Text style={invoiceModalStyles.label}>Amount Due</Text>
-                <Text style={invoiceModalStyles.amountValue}>
-                  ₱{Number(item.paymentAmount || 0).toFixed(2)}
-                </Text>
+                <Text style={invoiceModalStyles.label}>Grand Total</Text>
+                <Text style={invoiceModalStyles.amountValue}>{money(grandTotal)}</Text>
               </View>
-              {Number(item.amountPaid || 0) > 0 ? (
-                <View style={[invoiceModalStyles.infoRow, invoiceModalStyles.amountRow]}>
-                  <Text style={invoiceModalStyles.label}>Amount Paid</Text>
-                  <Text style={invoiceModalStyles.paidValue}>
-                    ₱{Number(item.amountPaid || 0).toFixed(2)}
-                  </Text>
-                </View>
-              ) : null}
-              {Number(item.balance || 0) > 0 ? (
-                <View style={[invoiceModalStyles.infoRow, invoiceModalStyles.balanceRow]}>
-                  <Text style={invoiceModalStyles.label}>Balance</Text>
-                  <Text style={invoiceModalStyles.balanceValue}>
-                    ₱{Number(item.balance || 0).toFixed(2)}
-                  </Text>
-                </View>
-              ) : null}
+
+              <View style={[invoiceModalStyles.infoRow, invoiceModalStyles.amountRow]}>
+                <Text style={invoiceModalStyles.label}>Amount Paid</Text>
+                <Text style={invoiceModalStyles.paidValue}>{money(amountPaid)}</Text>
+              </View>
+
+              <View style={[invoiceModalStyles.infoRow, invoiceModalStyles.balanceRow]}>
+                <Text style={invoiceModalStyles.label}>Balance</Text>
+                <Text style={invoiceModalStyles.balanceValue}>{money(balance)}</Text>
+              </View>
             </View>
 
-            {/* Status */}
             <View style={invoiceModalStyles.section}>
               <Text style={invoiceModalStyles.sectionTitle}>Status</Text>
+
               <View style={invoiceModalStyles.infoRow}>
                 <Text style={invoiceModalStyles.label}>Payment Status</Text>
                 <Text
@@ -239,21 +354,6 @@ function InvoiceModal({ visible, item, onClose }) {
                   ]}
                 >
                   {String(item.paymentStatus || 'Pending').toUpperCase()}
-                </Text>
-              </View>
-              <View style={invoiceModalStyles.infoRow}>
-                <Text style={invoiceModalStyles.label}>Job Repair Status</Text>
-                <Text
-                  style={[
-                    invoiceModalStyles.statusBadge,
-                    item.job_status === 'Completed'
-                      ? invoiceModalStyles.statusJobCompleted
-                      : item.job_status === 'Cancelled'
-                      ? invoiceModalStyles.statusJobCancelled
-                      : invoiceModalStyles.statusJobInProgress,
-                  ]}
-                >
-                  {String(item.job_status || 'N/A').toUpperCase()}
                 </Text>
               </View>
             </View>
@@ -275,8 +375,9 @@ function InvoiceModal({ visible, item, onClose }) {
 function PaymentMethodModal({ visible, item, onSelectMethod, onClose, isProcessing }) {
   if (!item) return null;
 
-  const balanceToPay =
-    Number(item.balance || 0) > 0 ? Number(item.balance || 0) : Number(item.paymentAmount || 0);
+  const grandTotal = getGrandTotal(item);
+  const amountPaid = Number(item.amountPaid || 0);
+  const balanceToPay = Math.max(0, grandTotal - amountPaid);
 
   const paymentMethods = [
     {
@@ -310,12 +411,7 @@ function PaymentMethodModal({ visible, item, onSelectMethod, onClose, isProcessi
   ];
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={paymentMethodModalStyles.overlay}>
         <View style={paymentMethodModalStyles.modal}>
           <View style={paymentMethodModalStyles.header}>
@@ -326,20 +422,13 @@ function PaymentMethodModal({ visible, item, onSelectMethod, onClose, isProcessi
             <View style={{ width: 28 }} />
           </View>
 
-          <ScrollView
-            style={paymentMethodModalStyles.content}
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Amount Section */}
+          <ScrollView style={paymentMethodModalStyles.content} showsVerticalScrollIndicator={false}>
             <View style={paymentMethodModalStyles.amountSection}>
-              <Text style={paymentMethodModalStyles.amountLabel}>Amount to Pay</Text>
-              <Text style={paymentMethodModalStyles.amountValue}>
-                ₱{balanceToPay.toFixed(2)}
-              </Text>
+              <Text style={paymentMethodModalStyles.amountLabel}>Balance to Pay</Text>
+              <Text style={paymentMethodModalStyles.amountValue}>{money(balanceToPay)}</Text>
               <Text style={paymentMethodModalStyles.serviceTitle}>{getServiceTitle(item)}</Text>
             </View>
 
-            {/* Payment Methods */}
             <Text style={paymentMethodModalStyles.methodsTitle}>Select a payment method</Text>
 
             <View style={paymentMethodModalStyles.methodsGrid}>
@@ -357,11 +446,7 @@ function PaymentMethodModal({ visible, item, onSelectMethod, onClose, isProcessi
                       { backgroundColor: `${method.color}15` },
                     ]}
                   >
-                    <Ionicons
-                      name={method.icon}
-                      size={32}
-                      color={method.color}
-                    />
+                    <Ionicons name={method.icon} size={32} color={method.color} />
                   </View>
                   <Text style={paymentMethodModalStyles.methodName}>{method.name}</Text>
                   <Text style={paymentMethodModalStyles.methodDescription}>
@@ -371,13 +456,8 @@ function PaymentMethodModal({ visible, item, onSelectMethod, onClose, isProcessi
               ))}
             </View>
 
-            {/* Info */}
             <View style={paymentMethodModalStyles.infoBox}>
-              <Ionicons
-                name="shield-checkmark-outline"
-                size={20}
-                color="#10B981"
-              />
+              <Ionicons name="shield-checkmark-outline" size={20} color="#10B981" />
               <Text style={paymentMethodModalStyles.infoText}>
                 Your payment is secured and encrypted for your protection.
               </Text>
@@ -401,142 +481,35 @@ function PaymentMethodModal({ visible, item, onSelectMethod, onClose, isProcessi
   );
 }
 
-function PaymentDetailsModal({ visible, paymentMethod, amount, onConfirm, onClose, isProcessing }) {
-  const getDetailsForMethod = (method) => {
-    switch (method) {
-      case 'GCash':
-        return {
-          icon: 'phone-portrait-outline',
-          color: '#0066FF',
-          title: 'GCash Payment',
-          steps: [
-            { number: '1', text: 'Open your GCash app' },
-            { number: '2', text: 'Go to "Send Money" section' },
-            { number: '3', text: 'Enter the merchant account details' },
-            { number: '4', text: 'Enter amount: ₱' + amount?.toFixed(2) },
-            { number: '5', text: 'Confirm and complete the transaction' },
-          ],
-          instruction: 'Send payment to our GCash account and keep the reference number.',
-          referencePrefix: 'GCASH',
-        };
-      case 'PayMaya':
-        return {
-          icon: 'card-outline',
-          color: '#FF6B00',
-          title: 'PayMaya Payment',
-          steps: [
-            { number: '1', text: 'Open your PayMaya app or website' },
-            { number: '2', text: 'Select "Pay Bills" or "Send Money"' },
-            { number: '3', text: 'Enter recipient account details' },
-            { number: '4', text: 'Enter amount: ₱' + amount?.toFixed(2) },
-            { number: '5', text: 'Authorize with your password/fingerprint' },
-          ],
-          instruction: 'Complete the payment using your PayMaya account.',
-          referencePrefix: 'MAYA',
-        };
-      case 'Debit/Credit Card':
-        return {
-          icon: 'card-sharp',
-          color: '#1F2937',
-          title: 'Card Payment',
-          steps: [
-            { number: '1', text: 'Provide your card information below' },
-            { number: '2', text: 'Card number, expiry date, and CVV' },
-            { number: '3', text: 'Billing address verification' },
-            { number: '4', text: 'Review payment amount: ₱' + amount?.toFixed(2) },
-            { number: '5', text: 'Complete the transaction securely' },
-          ],
-          instruction: 'Your card payment is processed with industry-standard encryption.',
-          referencePrefix: 'CARD',
-        };
-      case 'Bank Transfer':
-        return {
-          icon: 'business-outline',
-          color: '#0EA5E9',
-          title: 'Bank Transfer',
-          steps: [
-            { number: '1', text: 'Log in to your online banking' },
-            { number: '2', text: 'Select "Fund Transfer" option' },
-            { number: '3', text: 'Enter our bank account details' },
-            { number: '4', text: 'Enter amount: ₱' + amount?.toFixed(2) },
-            { number: '5', text: 'Confirm and submit the transfer' },
-          ],
-          instruction: 'Bank transfer typically takes 1-2 business days to process.',
-          referencePrefix: 'BANK',
-        };
-      default:
-        return null;
-    }
-  };
-
-  const details = getDetailsForMethod(paymentMethod);
-
-  if (!details) return null;
+function PaymentDetailsModal({
+  visible,
+  paymentMethod,
+  amount,
+  onConfirm,
+  onClose,
+  isProcessing,
+}) {
+  if (!paymentMethod) return null;
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={paymentDetailsModalStyles.overlay}>
         <View style={paymentDetailsModalStyles.modal}>
           <View style={paymentDetailsModalStyles.header}>
             <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
               <Ionicons name="close" size={28} color="#0F1F3A" />
             </TouchableOpacity>
-            <Text style={paymentDetailsModalStyles.title}>{details.title}</Text>
+            <Text style={paymentDetailsModalStyles.title}>{paymentMethod}</Text>
             <View style={{ width: 28 }} />
           </View>
 
-          <ScrollView
-            style={paymentDetailsModalStyles.content}
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Method Icon Section */}
-            <View style={paymentDetailsModalStyles.iconSection}>
-              <View
-                style={[
-                  paymentDetailsModalStyles.iconContainer,
-                  { backgroundColor: `${details.color}15` },
-                ]}
-              >
-                <Ionicons name={details.icon} size={48} color={details.color} />
-              </View>
-              <Text style={paymentDetailsModalStyles.amountText}>₱{amount?.toFixed(2)}</Text>
-              <Text style={paymentDetailsModalStyles.instructionText}>
-                {details.instruction}
-              </Text>
-            </View>
-
-            {/* Steps */}
-            <View style={paymentDetailsModalStyles.stepsSection}>
-              <Text style={paymentDetailsModalStyles.stepsTitle}>Payment Steps</Text>
-              {details.steps.map((step, index) => (
-                <View key={index} style={paymentDetailsModalStyles.stepItem}>
-                  <View
-                    style={[
-                      paymentDetailsModalStyles.stepNumber,
-                      { backgroundColor: details.color },
-                    ]}
-                  >
-                    <Text style={paymentDetailsModalStyles.stepNumberText}>{step.number}</Text>
-                  </View>
-                  <Text style={paymentDetailsModalStyles.stepText}>{step.text}</Text>
-                </View>
-              ))}
-            </View>
-
-            {/* Info Box */}
-            <View style={paymentDetailsModalStyles.infoBox}>
-              <Ionicons name="information-circle" size={20} color="#0066FF" />
-              <Text style={paymentDetailsModalStyles.infoText}>
-                Keep your reference number safe for record purposes. Support team can use it to
-                verify your payment.
-              </Text>
-            </View>
-          </ScrollView>
+          <View style={paymentDetailsModalStyles.iconSection}>
+            <Ionicons name="card-outline" size={54} color="#132B46" />
+            <Text style={paymentDetailsModalStyles.amountText}>{money(amount)}</Text>
+            <Text style={paymentDetailsModalStyles.instructionText}>
+              Confirm this payment to record it in your account.
+            </Text>
+          </View>
 
           <View style={paymentDetailsModalStyles.buttonContainer}>
             <TouchableOpacity
@@ -569,7 +542,6 @@ function PaymentDetailsModal({ visible, paymentMethod, amount, onConfirm, onClos
 }
 
 export default function PaymentsScreen({
-
   activeTab = 'payments',
   initialSegment = 'pending',
   onSelectTab,
@@ -583,96 +555,63 @@ export default function PaymentsScreen({
   const [payingId, setPayingId] = useState(null);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+
   const [invoiceModalVisible, setInvoiceModalVisible] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState(null);
+
   const [paymentMethodModalVisible, setPaymentMethodModalVisible] = useState(false);
   const [selectedPaymentItem, setSelectedPaymentItem] = useState(null);
+
   const [paymentDetailsModalVisible, setPaymentDetailsModalVisible] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null);
 
-  const normalizedTenantID =
-    Number(tenantID) > 0 ? Number(tenantID) : null;
+  const normalizedTenantID = Number(tenantID) > 0 ? Number(tenantID) : null;
+  const normalizedUserId = Number(user_id) > 0 ? Number(user_id) : null;
 
-  const normalizedUserId =
-    Number(user_id) > 0 ? Number(user_id) : null;
+  const loadPayments = useCallback(
+    async (isRefresh = false) => {
+      try {
+        if (!isRefresh) setLoading(true);
+        setRefreshing(isRefresh);
+        setError(null);
 
-  const loadPayments = async (isRefresh = false) => {
-    try {
-      if (!isRefresh) setLoading(true);
-      setRefreshing(isRefresh);
-      setError(null);
+        if (!normalizedTenantID || !normalizedUserId) {
+          setPendingPayments([]);
+          setHistoryPayments([]);
+          setError('Missing account information. Please log in again.');
+          return;
+        }
 
-      if (!normalizedTenantID || !normalizedUserId) {
-        console.warn('Missing tenantID or user_id', {
-          tenantID,
-          user_id,
-        });
+        const [pending, history] = await Promise.all([
+          fetchPendingPayments({
+            tenantID: normalizedTenantID,
+            user_id: normalizedUserId,
+            limit: 50,
+          }),
+          fetchPaymentHistory({
+            tenantID: normalizedTenantID,
+            user_id: normalizedUserId,
+            limit: 50,
+          }),
+        ]);
+
+        setPendingPayments(Array.isArray(pending) ? pending : []);
+        setHistoryPayments(Array.isArray(history) ? history : []);
+      } catch (err) {
+        setError(err?.message || 'Failed to load payments');
         setPendingPayments([]);
         setHistoryPayments([]);
-        setError('Missing account information. Please log in again.');
-        return;
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
       }
-
-      const [pending, history] = await Promise.all([
-        fetchPendingPayments({
-          tenantID: normalizedTenantID,
-          user_id: normalizedUserId,
-          limit: 50,
-        }),
-        fetchPaymentHistory({
-          tenantID: normalizedTenantID,
-          user_id: normalizedUserId,
-          limit: 50,
-        }),
-      ]);
-
-      console.log('Raw pending payments:', pending);
-
-      const filteredPending = (Array.isArray(pending) ? pending : []).filter(
-        (item) => {
-          // Filter payments that have:
-          // 1. An appointment_id (links to repair_jobs)
-          // 2. Pending payment status
-          const hasAppointmentId = !!item?.appointment_id;
-          const paymentStatus = String(item?.paymentStatus || '').trim().toLowerCase();
-          const isPending = paymentStatus === 'pending';
-          
-          console.log('Checking payment:', {
-            payment_id: item.payment_id,
-            appointment_id: item.appointment_id,
-            job_status: item.job_status,
-            hasAppointmentId,
-            paymentStatus,
-            isPending,
-            shouldDisplay: hasAppointmentId && isPending,
-          });
-          
-          return hasAppointmentId && isPending;
-        }
-      );
-
-      console.log('Filtered pending payments count:', filteredPending.length);
-
-      const filteredHistory = (Array.isArray(history) ? history : []).filter(
-        (item) => isConfirmedAppointment(item)
-      );
-
-      setPendingPayments(filteredPending);
-      setHistoryPayments(filteredHistory);
-    } catch (err) {
-      console.error('Error loading payments:', err);
-      setError(err?.message || 'Failed to load payments');
-      setPendingPayments([]);
-      setHistoryPayments([]);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+    },
+    [normalizedTenantID, normalizedUserId]
+  );
 
   useEffect(() => {
     loadPayments();
-  }, [tenantID, user_id]);
+  }, [loadPayments]);
 
   useEffect(() => {
     if (activeTab === 'history') {
@@ -682,9 +621,22 @@ export default function PaymentsScreen({
     }
   }, [activeTab]);
 
-  const data = useMemo(() => {
-    return segment === 'pending' ? pendingPayments : historyPayments;
-  }, [segment, pendingPayments, historyPayments]);
+  const data = useMemo(
+    () => (segment === 'pending' ? pendingPayments : historyPayments),
+    [segment, pendingPayments, historyPayments]
+  );
+
+  const totalBalance = useMemo(
+    () =>
+      pendingPayments.reduce((sum, item) => {
+        const grandTotal = getGrandTotal(item);
+        const amountPaid = Number(item.amountPaid || 0);
+        const balance = Math.max(0, grandTotal - amountPaid);
+
+        return sum + balance;
+      }, 0),
+    [pendingPayments]
+  );
 
   const isTabActive = (tab) => activeTab === tab;
 
@@ -699,11 +651,11 @@ export default function PaymentsScreen({
     setPaymentDetailsModalVisible(true);
   };
 
-  const handleConfirmPayment = async () => {
-    if (selectedPaymentItem && selectedPaymentMethod) {
-      await handlePaymentMethod(selectedPaymentItem, selectedPaymentMethod);
-      setPaymentDetailsModalVisible(false);
-    }
+  const normalizeDbPaymentMethod = (method) => {
+    if (method === 'Debit/Credit Card') return 'Card';
+    if (method === 'PayMaya') return 'GCash';
+    if (method === 'Bank Transfer') return 'Bank Transfer';
+    return 'GCash';
   };
 
   const handlePaymentMethod = async (item, method) => {
@@ -713,43 +665,48 @@ export default function PaymentsScreen({
         return;
       }
 
-      const balanceToPay =
-        Number(item.balance || 0) > 0 ? Number(item.balance || 0) : Number(item.paymentAmount || 0);
+      const grandTotal = getGrandTotal(item);
+      const amountPaid = Number(item.amountPaid || 0);
+      const balanceToPay = Math.max(0, grandTotal - amountPaid);
+
+      if (balanceToPay <= 0) {
+        Alert.alert('No Balance', 'This payment has no remaining balance.');
+        return;
+      }
 
       setPayingId(item.payment_id);
 
       let referenceNumber = `${Date.now()}`;
-
-      if (method === 'GCash') {
-        referenceNumber = `GCASH-${Date.now()}`;
-      } else if (method === 'PayMaya') {
-        referenceNumber = `MAYA-${Date.now()}`;
-      } else if (method === 'Debit/Credit Card') {
-        referenceNumber = `CARD-${Date.now()}`;
-      } else if (method === 'Bank Transfer') {
-        referenceNumber = `BANK-${Date.now()}`;
-      }
+      if (method === 'GCash') referenceNumber = `GCASH-${Date.now()}`;
+      if (method === 'PayMaya') referenceNumber = `MAYA-${Date.now()}`;
+      if (method === 'Debit/Credit Card') referenceNumber = `CARD-${Date.now()}`;
+      if (method === 'Bank Transfer') referenceNumber = `BANK-${Date.now()}`;
 
       await payPayment({
         payment_id: item.payment_id,
         tenantID: normalizedTenantID,
         user_id: normalizedUserId,
         amountPaid: balanceToPay,
+        paymentMethod: normalizeDbPaymentMethod(method),
         gcashReferenceNumber: referenceNumber,
-        remarks: `Paid via ${method}`,
       });
 
-      Alert.alert(
-        'Success',
-        `Payment of ₱${balanceToPay.toFixed(2)} recorded via ${method}`
-      );
-
+      Alert.alert('Success', `Payment of ${money(balanceToPay)} recorded via ${method}`);
       await loadPayments(true);
     } catch (err) {
-      Alert.alert('Error', 'Failed to process payment: ' + (err?.message || 'Unknown error'));
+      Alert.alert('Error', `Failed to process payment: ${err?.message || 'Unknown error'}`);
     } finally {
       setPayingId(null);
     }
+  };
+
+  const handleConfirmPayment = async () => {
+    if (!selectedPaymentItem || !selectedPaymentMethod) return;
+
+    await handlePaymentMethod(selectedPaymentItem, selectedPaymentMethod);
+    setPaymentDetailsModalVisible(false);
+    setSelectedPaymentMethod(null);
+    setSelectedPaymentItem(null);
   };
 
   const handleViewInvoice = (item) => {
@@ -760,26 +717,19 @@ export default function PaymentsScreen({
   if (error && !loading) {
     return (
       <View style={paymentStyles.container}>
-        <ScrollView
-          contentContainerStyle={paymentStyles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
+        <ScrollView contentContainerStyle={paymentStyles.scrollContent}>
           <View style={paymentStyles.headerRow}>
             <View style={paymentStyles.iconButton} />
             <Text style={paymentStyles.headerTitle}>Payments</Text>
-            <TouchableOpacity style={paymentStyles.iconButton} activeOpacity={0.85}>
-              <Ionicons name="wallet-outline" size={24} color="#0F1F3A" />
+            <TouchableOpacity style={paymentStyles.iconButton} onPress={() => loadPayments(true)}>
+              <Ionicons name="refresh" size={24} color="#0F1F3A" />
             </TouchableOpacity>
           </View>
 
           <View style={paymentStyles.errorContainer}>
             <Ionicons name="alert-circle" size={48} color="#B91C1C" />
             <Text style={paymentStyles.errorText}>{error}</Text>
-            <TouchableOpacity
-              style={paymentStyles.retryButton}
-              onPress={() => loadPayments()}
-              activeOpacity={0.85}
-            >
+            <TouchableOpacity style={paymentStyles.retryButton} onPress={() => loadPayments()}>
               <Text style={paymentStyles.retryButtonText}>Try Again</Text>
             </TouchableOpacity>
           </View>
@@ -807,14 +757,23 @@ export default function PaymentsScreen({
             activeOpacity={0.85}
             onPress={() => loadPayments(true)}
           >
-            <Ionicons name="wallet-outline" size={24} color="#0F1F3A" />
+            <Ionicons name="refresh" size={24} color="#0F1F3A" />
           </TouchableOpacity>
         </View>
 
         <Text style={paymentStyles.pageTitle}>Pending Actions</Text>
         <Text style={paymentStyles.pageSubtitle}>
-          Review and complete payments for your confirmed vehicle services.
+          Review and complete payments based on your completed repair job total.
         </Text>
+
+        <View style={paymentStyles.balanceSummaryCard}>
+          <Text style={paymentStyles.balanceSummaryLabel}>TOTAL BALANCE</Text>
+          <Text style={paymentStyles.balanceSummaryValue}>{money(totalBalance)}</Text>
+          <Text style={paymentStyles.balanceSummarySubtext}>
+            From {pendingPayments.length} pending payment
+            {pendingPayments.length === 1 ? '' : 's'}
+          </Text>
+        </View>
 
         <View style={paymentStyles.segmentWrap}>
           <TouchableOpacity
@@ -882,8 +841,8 @@ export default function PaymentsScreen({
             <Text style={paymentStyles.emptyText}>No {segment} payments</Text>
             <Text style={paymentStyles.emptySubtext}>
               {segment === 'pending'
-                ? 'No payments for confirmed appointments.'
-                : 'No payment history for confirmed appointments yet'}
+                ? 'No completed repair job payments yet.'
+                : 'No payment history yet.'}
             </Text>
           </View>
         )}
@@ -896,7 +855,7 @@ export default function PaymentsScreen({
             style={paymentStyles.infoIcon}
           />
           <Text style={paymentStyles.infoText}>
-            Payments are processed securely. Only confirmed appointments are shown here.
+            Payments are created only after the repair job is completed.
           </Text>
         </View>
       </ScrollView>
@@ -918,15 +877,15 @@ export default function PaymentsScreen({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.navItem, isTabActive('appointments') && styles.navItemSelected]}
-            onPress={() => onSelectTab && onSelectTab('appointments')}
+            style={[styles.navItem, isTabActive('bookService') && styles.navItemSelected]}
+            onPress={() => onSelectTab && onSelectTab('bookService')}
           >
             <Ionicons
               name="calendar-outline"
               size={22}
-              color={isTabActive('appointments') ? '#0F172A' : '#94A3B8'}
+              color={isTabActive('bookService') ? '#0F172A' : '#94A3B8'}
             />
-            <Text style={[styles.navLabel, isTabActive('appointments') && styles.navLabelActive]}>
+            <Text style={[styles.navLabel, isTabActive('bookService') && styles.navLabelActive]}>
               Bookings
             </Text>
           </TouchableOpacity>
@@ -998,7 +957,15 @@ export default function PaymentsScreen({
       <PaymentDetailsModal
         visible={paymentDetailsModalVisible}
         paymentMethod={selectedPaymentMethod}
-        amount={selectedPaymentItem?.balance || selectedPaymentItem?.paymentAmount}
+        amount={
+          selectedPaymentItem
+            ? Math.max(
+                0,
+                getGrandTotal(selectedPaymentItem) -
+                  Number(selectedPaymentItem.amountPaid || 0)
+              )
+            : 0
+        }
         onConfirm={handleConfirmPayment}
         onClose={() => {
           setPaymentDetailsModalVisible(false);
@@ -1010,6 +977,13 @@ export default function PaymentsScreen({
   );
 }
 
+/* Keep your existing style blocks:
+   paymentStyles
+   invoiceModalStyles
+   paymentMethodModalStyles
+   paymentDetailsModalStyles
+*/
+
 const paymentStyles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1018,7 +992,7 @@ const paymentStyles = StyleSheet.create({
   scrollContent: {
     paddingTop: 8,
     paddingHorizontal: 22,
-    paddingBottom: 26,
+    paddingBottom: 120,
   },
   headerRow: {
     flexDirection: 'row',
@@ -1050,10 +1024,47 @@ const paymentStyles = StyleSheet.create({
   },
   pageSubtitle: {
     marginTop: 10,
-    marginBottom: 20,
+    marginBottom: 16,
     color: '#334A66',
     fontSize: 13,
     lineHeight: 21,
+  },
+  creatingInvoiceCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2F7',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+  },
+  creatingInvoiceText: {
+    marginLeft: 10,
+    color: '#0F1F3A',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  balanceSummaryCard: {
+    backgroundColor: '#132B46',
+    borderRadius: 18,
+    padding: 18,
+    marginBottom: 16,
+  },
+  balanceSummaryLabel: {
+    color: '#CBD5E1',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  balanceSummaryValue: {
+    color: '#FFFFFF',
+    fontSize: 34,
+    fontWeight: '900',
+    marginTop: 6,
+  },
+  balanceSummarySubtext: {
+    color: '#DDE7F5',
+    marginTop: 5,
+    fontSize: 13,
   },
   segmentWrap: {
     flexDirection: 'row',
@@ -1113,6 +1124,12 @@ const paymentStyles = StyleSheet.create({
   cardStatusOverdue: {
     color: '#B91C1C',
   },
+  cardStatusPaid: {
+    color: '#15803D',
+  },
+  cardStatusPartial: {
+    color: '#B45309',
+  },
   cardTitle: {
     color: '#0F1F3A',
     fontSize: 18,
@@ -1123,12 +1140,29 @@ const paymentStyles = StyleSheet.create({
   vehicleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   vehicleText: {
     marginLeft: 8,
     color: '#4A5A73',
     fontSize: 15,
+  },
+  servicesPreview: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 14,
+  },
+  servicePill: {
+    backgroundColor: '#EEF2F7',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  servicePillText: {
+    color: '#334A66',
+    fontSize: 11,
+    fontWeight: '700',
   },
   amountRow: {
     flexDirection: 'row',
@@ -1148,41 +1182,27 @@ const paymentStyles = StyleSheet.create({
   },
   amountText: {
     color: '#0F1F3A',
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '800',
   },
   paidText: {
     color: '#10B981',
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   balanceText: {
     color: '#B91C1C',
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
+  },
+  zeroBalanceText: {
+    color: '#10B981',
+    fontSize: 16,
+    fontWeight: '800',
   },
   cardBottomRow: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  jobStatusBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: '#D97706',
-  },
-  jobStatusText: {
-    flex: 1,
-    marginLeft: 10,
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#92400E',
-    lineHeight: 16,
   },
   payNowButton: {
     flex: 1,
@@ -1288,7 +1308,7 @@ const paymentStyles = StyleSheet.create({
 const invoiceModalStyles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'flex-end',
   },
   modal: {
@@ -1330,6 +1350,7 @@ const invoiceModalStyles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
     paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5FB',
@@ -1340,15 +1361,38 @@ const invoiceModalStyles = StyleSheet.create({
     fontWeight: '500',
   },
   value: {
+    flex: 1,
+    textAlign: 'right',
     fontSize: 14,
     color: '#0F1F3A',
     fontWeight: '600',
   },
   refValue: {
-    fontFamily: 'Courier New',
     fontSize: 12,
     fontWeight: '700',
     color: '#2D3748',
+  },
+  serviceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5FB',
+  },
+  serviceName: {
+    color: '#0F1F3A',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  serviceMeta: {
+    color: '#7A8DAA',
+    fontSize: 12,
+    marginTop: 3,
+  },
+  servicePrice: {
+    color: '#0F1F3A',
+    fontWeight: '800',
   },
   amountRow: {
     paddingVertical: 12,
@@ -1368,6 +1412,9 @@ const invoiceModalStyles = StyleSheet.create({
     fontWeight: '700',
     color: '#B91C1C',
   },
+  balanceRow: {
+    borderBottomColor: '#FFE2E2',
+  },
   statusBadge: {
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -1383,29 +1430,6 @@ const invoiceModalStyles = StyleSheet.create({
   statusPending: {
     backgroundColor: '#FEF3C7',
     color: '#B45309',
-  },
-  statusConfirmed: {
-    backgroundColor: '#DBEAFE',
-    color: '#1E40AF',
-  },
-  statusOther: {
-    backgroundColor: '#F3F4F6',
-    color: '#374151',
-  },
-  statusJobCompleted: {
-    backgroundColor: '#DCFCE7',
-    color: '#166534',
-  },
-  statusJobCancelled: {
-    backgroundColor: '#FEE2E2',
-    color: '#991B1B',
-  },
-  statusJobInProgress: {
-    backgroundColor: '#DBEAFE',
-    color: '#1E40AF',
-  },
-  balanceRow: {
-    borderBottomColor: '#FFE2E2',
   },
   closeButton: {
     backgroundColor: '#132B46',
@@ -1425,7 +1449,7 @@ const invoiceModalStyles = StyleSheet.create({
 const paymentMethodModalStyles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
   modal: {
@@ -1560,14 +1584,13 @@ const paymentMethodModalStyles = StyleSheet.create({
 const paymentDetailsModalStyles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
   modal: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    maxHeight: '90%',
     paddingTop: 20,
     paddingHorizontal: 20,
     paddingBottom: 20,
@@ -1586,26 +1609,16 @@ const paymentDetailsModalStyles = StyleSheet.create({
     fontWeight: '800',
     color: '#0F1F3A',
   },
-  content: {
-    paddingBottom: 20,
-  },
   iconSection: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 24,
     paddingVertical: 20,
-  },
-  iconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
   },
   amountText: {
     fontSize: 36,
     fontWeight: '800',
     color: '#132B46',
+    marginTop: 12,
     marginBottom: 12,
   },
   instructionText: {
@@ -1615,64 +1628,9 @@ const paymentDetailsModalStyles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
   },
-  stepsSection: {
-    marginBottom: 28,
-  },
-  stepsTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0F1F3A',
-    marginBottom: 16,
-  },
-  stepItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 14,
-  },
-  stepNumber: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-    minWidth: 36,
-  },
-  stepNumberText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  stepText: {
-    flex: 1,
-    fontSize: 14,
-    color: '#334A66',
-    fontWeight: '500',
-    lineHeight: 20,
-    paddingTop: 8,
-  },
-  infoBox: {
-    flexDirection: 'row',
-    backgroundColor: '#EFF6FF',
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'flex-start',
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-  },
-  infoText: {
-    flex: 1,
-    fontSize: 12,
-    color: '#1E40AF',
-    fontWeight: '500',
-    marginLeft: 10,
-    lineHeight: 18,
-  },
   buttonContainer: {
     flexDirection: 'row',
     gap: 12,
-    marginTop: 16,
   },
   cancelBtn: {
     flex: 1,
@@ -1680,8 +1638,6 @@ const paymentDetailsModalStyles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
   },
   cancelBtnText: {
     color: '#6B7280',

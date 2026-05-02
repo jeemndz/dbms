@@ -6,6 +6,8 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Modal,
+  ActivityIndicator,
   View,
 } from 'react-native';
 import { FontAwesome, Ionicons } from '@expo/vector-icons';
@@ -24,6 +26,9 @@ export default function LoginScreen({
 }) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [forgotModalVisible, setForgotModalVisible] = useState(false);
+  const [forgotIdentifier, setForgotIdentifier] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
 
   const handleLogin = async () => {
     const normalizedIdentifier = identifier.trim();
@@ -136,6 +141,86 @@ export default function LoginScreen({
     }
   };
 
+  const openForgotModal = () => {
+    setForgotIdentifier('');
+    setForgotModalVisible(true);
+  };
+
+  const closeForgotModal = () => {
+    setForgotModalVisible(false);
+    setForgotLoading(false);
+  };
+
+  const handleForgotSubmit = async () => {
+    const normalized = (forgotIdentifier || '').trim();
+    if (!normalized) {
+      Alert.alert('Error', 'Please enter your email or username');
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const payload = new URLSearchParams();
+      payload.append('email', normalized);
+      payload.append('username', normalized);
+      payload.append('identifier', normalized);
+      payload.append('login', normalized);
+
+      // Attempt form-encoded first, then JSON if needed
+      const endpoints = [
+        'https://rapidrepair-gygpcbczgyg0czek.southeastasia-01.azurewebsites.net/userforgot.php',
+        'https://rapidrepair-gygpcbczgyg0czek.southeastasia-01.azurewebsites.net/forgot.php',
+      ];
+
+      let lastMessage = 'Unable to process password reset.';
+      for (const ep of endpoints) {
+        try {
+          const resp = await axios.post(ep, payload, {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          });
+
+          const status = String(resp?.data?.status || '').trim().toLowerCase();
+          const message = resp?.data?.message || lastMessage;
+          if (status === 'success') {
+            Alert.alert('Password Reset', message || 'Check your email for reset instructions');
+            closeForgotModal();
+            return;
+          }
+
+          lastMessage = message;
+        } catch (err) {
+          // Try the JSON variant below if this fails for this endpoint
+        }
+      }
+
+      // Try a JSON POST to the primary endpoint as a fallback
+      try {
+        const respJson = await axios.post(endpoints[0], {
+          email: normalized,
+          username: normalized,
+          identifier: normalized,
+        }, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+        const status = String(respJson?.data?.status || '').trim().toLowerCase();
+        const message = respJson?.data?.message || lastMessage;
+        if (status === 'success') {
+          Alert.alert('Password Reset', message || 'Check your email for reset instructions');
+          closeForgotModal();
+          return;
+        }
+
+        Alert.alert('Password Reset', message || lastMessage);
+      } catch (err) {
+        const serverMessage = err?.response?.data?.message || err?.response?.data || 'Unable to contact server';
+        Alert.alert('Error', String(serverMessage));
+      }
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
   return (
     <>
       <Text style={styles.pageTitle}>Welcome</Text>
@@ -174,10 +259,7 @@ export default function LoginScreen({
           <View style={styles.fieldLabelRow}>
             <Text style={styles.fieldLabel}>Password</Text>
             <TouchableOpacity
-              onPress={
-                onForgotPassword ||
-                (() => Alert.alert('Forgot Password', 'Password recovery is not available yet.'))
-              }
+                onPress={onForgotPassword || openForgotModal}
             >
               <Text style={styles.forgotText}>Forgot Password?</Text>
             </TouchableOpacity>
@@ -217,6 +299,40 @@ export default function LoginScreen({
           </TouchableOpacity>
         </View>
       </View>
+
+      <Modal visible={forgotModalVisible} animationType="slide" transparent>
+        <View style={[styles.modalOverlay || {flex:1, backgroundColor:'rgba(0,0,0,0.4)', justifyContent:'center', padding:20}]}> 
+          <View style={[styles.form, {maxHeight:320, borderRadius:8, backgroundColor:'#fff'}]}>
+            <Text style={[styles.pageTitle, {marginBottom:8}]}>Reset Password</Text>
+            <Text style={[styles.pageSubtitle, {marginBottom:12}]}>Enter your email or username</Text>
+
+            <View style={styles.fieldGroup}>
+              <TextInput
+                value={forgotIdentifier}
+                onChangeText={setForgotIdentifier}
+                placeholder="Email or Username"
+                placeholderTextColor="#9AA3B1"
+                style={styles.input}
+                autoCapitalize="none"
+                keyboardType="default"
+              />
+            </View>
+
+            <View style={{flexDirection:'row', justifyContent:'flex-end', gap:8}}>
+              <TouchableOpacity onPress={closeForgotModal} style={[styles.secondaryButton || styles.primaryButton, {marginRight:8}]}> 
+                <Text style={styles.primaryButtonText || {color:'#000'}}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleForgotSubmit} style={styles.primaryButton} disabled={forgotLoading}>
+                {forgotLoading ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text style={styles.primaryButtonText}>Send</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }

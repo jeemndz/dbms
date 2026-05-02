@@ -8,11 +8,12 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Text, TouchableOpacity } from 'react-native';
+
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
 import HomeScreen from './screens/HomeScreen';
-import VerificationScreen from './screens/VerificationScreen';
 import { styles } from './styles';
+
 import {
   createVehicle,
   deleteVehicle,
@@ -28,10 +29,8 @@ export default function App() {
   const [showPassword, setShowPassword] = useState(false);
   const [homeTab, setHomeTab] = useState('home');
   const [currentUser, setCurrentUser] = useState(null);
-  const [pendingRegistration, setPendingRegistration] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [isVehiclesLoading, setIsVehiclesLoading] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
 
   const tenantID = Number(
     currentUser?.tenantID ||
@@ -42,6 +41,7 @@ export default function App() {
       currentUser?.tenant ||
       1
   );
+
   const user_id = Number(currentUser?.user_id || currentUser?.userId || 0);
 
   const headerTitle = useMemo(() => 'Rapid Repair', []);
@@ -75,48 +75,33 @@ export default function App() {
   };
 
   const handleRegisterSuccess = async (registrationData) => {
-    setPendingRegistration(registrationData);
-    Alert.alert('Invite Code Required', 'Enter the 6-digit invite code from the shop owner.');
-    setScreen('verify');
-  };
-
-  const handleVerifyAccount = async (enteredCode) => {
-    setIsVerifying(true);
     try {
-      if (!pendingRegistration) {
-        Alert.alert('Registration Missing', 'Please start the registration again.');
-        setScreen('register');
-        return;
-      }
-
       const response = await fetch(`${API_BASE_URL}/userregister.php`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          ...pendingRegistration,
-          invite_code: enteredCode,
-        }),
+        body: JSON.stringify(registrationData),
       });
 
       const payload = await response.json().catch(() => ({}));
+
       if (!response.ok || String(payload?.status || '').toLowerCase() !== 'success') {
         throw new Error(payload?.message || 'Registration failed.');
       }
 
-      Alert.alert('Registered', payload?.message || 'Your account has been created successfully.');
-      setPendingRegistration(null);
+      Alert.alert(
+        'Registered',
+        payload?.message || 'Your account has been created successfully.'
+      );
+
       setScreen('login');
     } catch (error) {
-      Alert.alert('Registration Failed', String(error?.message || 'Unable to create account right now.'));
-    } finally {
-      setIsVerifying(false);
+      Alert.alert(
+        'Registration Failed',
+        String(error?.message || 'Unable to create account right now.')
+      );
     }
-  };
-
-  const handleResendCode = async () => {
-    Alert.alert('Invite Code', 'Ask the shop owner for the 6-digit invite code.');
   };
 
   const loadVehicles = async () => {
@@ -126,15 +111,21 @@ export default function App() {
     }
 
     setIsVehiclesLoading(true);
+
     try {
       const canUseUserScopedFetch = Number.isFinite(user_id) && user_id > 0;
+
       const list = canUseUserScopedFetch
         ? await fetchVehiclesByUser({ tenantID, user_id })
         : await fetchVehicles(tenantID);
+
       setVehicles(list);
     } catch (error) {
       const serverMessage =
-        error?.response?.data?.message || error?.response?.data || 'Unable to load vehicles.';
+        error?.response?.data?.message ||
+        error?.response?.data ||
+        'Unable to load vehicles.';
+
       Alert.alert('Vehicles', String(serverMessage));
     } finally {
       setIsVehiclesLoading(false);
@@ -142,30 +133,59 @@ export default function App() {
   };
 
   const handleCreateVehicle = async (vehicleForm) => {
-    if (!Number.isFinite(tenantID) || tenantID <= 0 || !Number.isFinite(user_id) || user_id <= 0) {
+    if (
+      !Number.isFinite(tenantID) ||
+      tenantID <= 0 ||
+      !Number.isFinite(user_id) ||
+      user_id <= 0
+    ) {
       throw new Error('Missing tenantID or user_id. Please log in again before saving a vehicle.');
     }
 
-    const created = await createVehicle({ vehicleForm, tenantID, user_id });
+    const created = await createVehicle({
+      vehicleForm,
+      tenantID,
+      user_id,
+    });
+
     setVehicles((prev) => [created, ...prev]);
+
     return created;
   };
 
   const handleUpdateVehicle = async (vehicle_id, updates) => {
-    const updated = await updateVehicle({ vehicle_id, updates, tenantID, user_id });
+    const updated = await updateVehicle({
+      vehicle_id,
+      updates,
+      tenantID,
+      user_id,
+    });
+
     setVehicles((prev) =>
       prev.map((vehicle) =>
         String(vehicle.vehicle_id) === String(vehicle_id)
-          ? { ...vehicle, ...updated, ...updates }
+          ? {
+              ...vehicle,
+              ...updated,
+              ...updates,
+            }
           : vehicle
       )
     );
+
     return updated;
   };
 
   const handleDeleteVehicle = async (vehicle_id) => {
-    await deleteVehicle({ vehicle_id, tenantID, user_id });
-    setVehicles((prev) => prev.filter((vehicle) => String(vehicle.vehicle_id) !== String(vehicle_id)));
+    await deleteVehicle({
+      vehicle_id,
+      tenantID,
+      user_id,
+    });
+
+    setVehicles((prev) =>
+      prev.filter((vehicle) => String(vehicle.vehicle_id) !== String(vehicle_id))
+    );
   };
 
   useEffect(() => {
@@ -175,6 +195,7 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
+
       {screen === 'home' ? (
         <HomeScreen
           activeTab={homeTab}
@@ -194,29 +215,41 @@ export default function App() {
             handleHomeAction('Notifications', 'No new alerts at the moment.')
           }
           onLiveDetails={() =>
-            handleHomeAction('Live Service Details', 'Technician is currently working on your vehicle.')
+            handleHomeAction(
+              'Live Service Details',
+              'Technician is currently working on your vehicle.'
+            )
           }
           onQuickAction={handleQuickActionPress}
           onCallShop={() =>
-            handleHomeAction('Calling Shop', 'This can open your dialer when running on a device.')
+            handleHomeAction(
+              'Calling Shop',
+              'This can open your dialer when running on a device.'
+            )
           }
           onSelectTab={(tab) => setHomeTab(tab)}
         />
       ) : (
-        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-          {screen !== 'verify' && (
-            <View style={styles.headerRow}>
-              {screen === 'register' ? (
-                <TouchableOpacity style={styles.backButton} onPress={() => setScreen('login')}>
-                  <Ionicons name="chevron-back" size={22} color="#0F172A" />
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.backButtonPlaceholder} />
-              )}
-              <Text style={styles.headerTitleLarge}>{headerTitle}</Text>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.headerRow}>
+            {screen === 'register' ? (
+              <TouchableOpacity
+                style={styles.backButton}
+                onPress={() => setScreen('login')}
+              >
+                <Ionicons name="chevron-back" size={22} color="#0F172A" />
+              </TouchableOpacity>
+            ) : (
               <View style={styles.backButtonPlaceholder} />
-            </View>
-          )}
+            )}
+
+            <Text style={styles.headerTitleLarge}>{headerTitle}</Text>
+
+            <View style={styles.backButtonPlaceholder} />
+          </View>
 
           {screen === 'login' ? (
             <LoginScreen
@@ -235,31 +268,36 @@ export default function App() {
                 )
               }
               onGoogleLogin={() =>
-                handleHomeAction('Google Login', 'Google sign-in will be available in a future update.')
+                handleHomeAction(
+                  'Google Login',
+                  'Google sign-in will be available in a future update.'
+                )
               }
               onAppleLogin={() =>
-                handleHomeAction('Apple Login', 'Apple sign-in will be available in a future update.')
+                handleHomeAction(
+                  'Apple Login',
+                  'Apple sign-in will be available in a future update.'
+                )
               }
             />
-          ) : screen === 'register' ? (
+          ) : (
             <RegisterScreen
               showPassword={showPassword}
               onTogglePassword={() => setShowPassword((prev) => !prev)}
               onHaveAccount={() => setScreen('login')}
               onRegister={handleRegisterSuccess}
               onOpenTerms={() =>
-                handleHomeAction('Terms of Service', 'Terms page will be connected in a future update.')
+                handleHomeAction(
+                  'Terms of Service',
+                  'Terms page will be connected in a future update.'
+                )
               }
               onOpenPrivacy={() =>
-                handleHomeAction('Privacy Policy', 'Privacy page will be connected in a future update.')
+                handleHomeAction(
+                  'Privacy Policy',
+                  'Privacy page will be connected in a future update.'
+                )
               }
-            />
-          ) : (
-            <VerificationScreen
-              onBack={() => setScreen('register')}
-              onVerify={handleVerifyAccount}
-              onResend={handleResendCode}
-              isVerifying={isVerifying}
             />
           )}
         </ScrollView>

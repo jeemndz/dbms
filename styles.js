@@ -1472,6 +1472,12 @@ export const styles = StyleSheet.create({
     fontWeight: '800',
     marginBottom: 14,
   },
+  bookServiceStepTitleCompact: {
+    color: '#0F1F3A',
+    fontSize: 24,
+    fontWeight: '800',
+    marginBottom: 12,
+  },
   bookServiceStepPercent: {
     color: '#0F1F3A',
     fontSize: 20,
